@@ -1,11 +1,14 @@
 spring:
   application:
     name: atomicledger
-  autoconfigure:
-    exclude:
-      - org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration
-      - org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfiguration
-      - org.springframework.boot.flyway.autoconfigure.FlywayAutoConfiguration
+  datasource:
+    url: ${ATOMICLEDGER_DATASOURCE_URL:jdbc:postgresql://localhost:5432/atomicledger}
+    username: ${ATOMICLEDGER_DATASOURCE_USERNAME:atomicledger}
+    password: ${ATOMICLEDGER_DATASOURCE_PASSWORD:atomicledger}
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
 
 management:
   endpoints:

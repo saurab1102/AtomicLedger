@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: atomicledger-postgres
+    environment:
+      POSTGRES_DB: atomicledger
+      POSTGRES_USER: atomicledger
+      POSTGRES_PASSWORD: atomicledger
+    ports:
+      - "5432:5432"
+    volumes:
+      - atomicledger-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U atomicledger -d atomicledger"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  atomicledger-postgres-data:
