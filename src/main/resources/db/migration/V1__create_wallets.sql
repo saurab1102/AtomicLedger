@@ -1,5 +1,3 @@
-
-
 CREATE TABLE wallets (
     id UUID PRIMARY KEY,
 

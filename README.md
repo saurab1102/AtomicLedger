@@ -23,3 +23,9 @@ Run the tests:
 ```bash
 ./mvnw test
 ```
+
+## Inspecting PostgreSQL
+
+```bash
+docker compose exec postgres psql -U atomicledger -d atomicledger
+```

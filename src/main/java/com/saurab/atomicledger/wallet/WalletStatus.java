@@ -1,5 +1,6 @@
 package com.saurab.atomicledger.wallet;
 
 public enum WalletStatus {
-	ACTIVE
+	ACTIVE,
+	INACTIVE
 }

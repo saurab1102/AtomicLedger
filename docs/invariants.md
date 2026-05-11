@@ -8,3 +8,5 @@
 6. Failed transactions must not mutate wallet balances.
 7. Ledger entries are immutable after creation.
 8. Reconciliation must detect mismatch between cached balance and ledger-dervied balance.
+9. A successful deposit must create one CREDIT ledger entry.
+10. A duplicate deposit request with the same idempotency key must not increase balance twice.

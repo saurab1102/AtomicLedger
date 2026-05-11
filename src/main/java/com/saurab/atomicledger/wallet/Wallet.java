@@ -61,4 +61,12 @@ public class Wallet {
 	public WalletStatus getStatus() {
 		return this.status;
 	}
+
+	public boolean isActive() {
+		return this.status == WalletStatus.ACTIVE;
+	}
+
+	public void credit(BigDecimal amount) {
+		this.availableBalance = this.availableBalance.add(amount);
+	}
 }
