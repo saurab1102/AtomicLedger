@@ -11,7 +11,10 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 import com.saurab.atomicledger.wallet.MissingIdempotencyKeyException;
+import com.saurab.atomicledger.wallet.InsufficientAvailableBalanceException;
+import com.saurab.atomicledger.wallet.SameWalletTransferException;
 import com.saurab.atomicledger.wallet.UnsupportedWalletCurrencyException;
+import com.saurab.atomicledger.wallet.WalletCurrencyMismatchException;
 import com.saurab.atomicledger.wallet.WalletNotActiveException;
 import com.saurab.atomicledger.wallet.WalletNotFoundException;
 
@@ -51,7 +54,7 @@ public class WalletExceptionHandler {
 	public ResponseEntity<ValidationErrorResponse> handleWalletNotFound(WalletNotFoundException exception) {
 		ValidationErrorResponse response = new ValidationErrorResponse(
 			"Validation failed",
-			List.of(new FieldErrorResponse("walletId", exception.getMessage()))
+			List.of(new FieldErrorResponse(exception.getField(), exception.getMessage()))
 		);
 		return ResponseEntity.status(HttpStatus.NOT_FOUND).body(response);
 	}
@@ -60,7 +63,34 @@ public class WalletExceptionHandler {
 	public ResponseEntity<ValidationErrorResponse> handleWalletNotActive(WalletNotActiveException exception) {
 		ValidationErrorResponse response = new ValidationErrorResponse(
 			"Validation failed",
-			List.of(new FieldErrorResponse("walletId", exception.getMessage()))
+			List.of(new FieldErrorResponse(exception.getField(), exception.getMessage()))
+		);
+		return ResponseEntity.badRequest().body(response);
+	}
+
+	@ExceptionHandler(SameWalletTransferException.class)
+	public ResponseEntity<ValidationErrorResponse> handleSameWalletTransfer(SameWalletTransferException exception) {
+		ValidationErrorResponse response = new ValidationErrorResponse(
+			"Validation failed",
+			List.of(new FieldErrorResponse("destinationWalletId", exception.getMessage()))
+		);
+		return ResponseEntity.badRequest().body(response);
+	}
+
+	@ExceptionHandler(InsufficientAvailableBalanceException.class)
+	public ResponseEntity<ValidationErrorResponse> handleInsufficientAvailableBalance(InsufficientAvailableBalanceException exception) {
+		ValidationErrorResponse response = new ValidationErrorResponse(
+			"Validation failed",
+			List.of(new FieldErrorResponse("amount", exception.getMessage()))
+		);
+		return ResponseEntity.badRequest().body(response);
+	}
+
+	@ExceptionHandler(WalletCurrencyMismatchException.class)
+	public ResponseEntity<ValidationErrorResponse> handleWalletCurrencyMismatch(WalletCurrencyMismatchException exception) {
+		ValidationErrorResponse response = new ValidationErrorResponse(
+			"Validation failed",
+			List.of(new FieldErrorResponse("currency", exception.getMessage()))
 		);
 		return ResponseEntity.badRequest().body(response);
 	}

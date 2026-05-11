@@ -5,7 +5,8 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import java.math.BigDecimal;
+import java.util.Comparator;
+import java.util.List;
 import java.util.UUID;
 
 import com.jayway.jsonpath.JsonPath;
@@ -272,6 +273,231 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 		assertThat(this.walletTransactionRepository.findAll()).hasSize(1);
 		assertThat(this.ledgerEntryRepository.findAll()).hasSize(1);
 		assertThat(this.walletRepository.findById(walletId).orElseThrow().getAvailableBalance()).isEqualByComparingTo("75.00");
+	}
+
+	@Test
+	void transfersSuccessfullyAndPersistsAccountingRecords() throws Exception {
+		UUID sourceWalletId = createWallet("source-001");
+		UUID destinationWalletId = createWallet("destination-001");
+		deposit(sourceWalletId, "seed-source-001", "200.00");
+
+		MvcResult result = this.mockMvc.perform(post("/api/v1/transfers")
+			.contentType(MediaType.APPLICATION_JSON)
+			.header("Idempotency-Key", "transfer-001")
+			.content("""
+				{
+				  "sourceWalletId": "%s",
+				  "destinationWalletId": "%s",
+				  "amount": 75.00,
+				  "currency": "INR"
+				}
+				""".formatted(sourceWalletId, destinationWalletId)))
+			.andExpect(status().isCreated())
+			.andExpect(jsonPath("$.sourceWalletId").value(sourceWalletId.toString()))
+			.andExpect(jsonPath("$.destinationWalletId").value(destinationWalletId.toString()))
+			.andExpect(jsonPath("$.amount").value(75.0))
+			.andExpect(jsonPath("$.currency").value("INR"))
+			.andExpect(jsonPath("$.transactionType").value("TRANSFER"))
+			.andExpect(jsonPath("$.transactionStatus").value("SUCCEEDED"))
+			.andExpect(jsonPath("$.sourceAvailableBalance").value(125.0))
+			.andExpect(jsonPath("$.destinationAvailableBalance").value(75.0))
+			.andReturn();
+
+		UUID transactionId = UUID.fromString(JsonPath.read(result.getResponse().getContentAsString(), "$.transactionId"));
+
+		Wallet sourceWallet = this.walletRepository.findById(sourceWalletId).orElseThrow();
+		Wallet destinationWallet = this.walletRepository.findById(destinationWalletId).orElseThrow();
+		assertThat(sourceWallet.getAvailableBalance()).isEqualByComparingTo("125.00");
+		assertThat(destinationWallet.getAvailableBalance()).isEqualByComparingTo("75.00");
+
+		WalletTransaction transaction = this.walletTransactionRepository.findById(transactionId).orElseThrow();
+		assertThat(transaction.getTransactionType()).isEqualTo(WalletTransactionType.TRANSFER);
+		assertThat(transaction.getStatus()).isEqualTo(WalletTransactionStatus.SUCCEEDED);
+		assertThat(transaction.getWallet().getId()).isEqualTo(sourceWalletId);
+		assertThat(transaction.getCounterpartyWallet().getId()).isEqualTo(destinationWalletId);
+		assertThat(transaction.getResultingAvailableBalance()).isEqualByComparingTo("125.00");
+		assertThat(transaction.getCounterpartyResultingAvailableBalance()).isEqualByComparingTo("75.00");
+
+		List<LedgerEntry> entries = this.ledgerEntryRepository.findAllByTransactionId(transactionId).stream()
+			.sorted(Comparator.comparing(entry -> entry.getWallet().getId()))
+			.toList();
+		assertThat(entries).hasSize(2);
+		assertThat(entries.stream().filter(entry -> entry.getWallet().getId().equals(sourceWalletId)).findFirst().orElseThrow().getEntryType())
+			.isEqualTo(LedgerEntryType.DEBIT);
+		assertThat(entries.stream().filter(entry -> entry.getWallet().getId().equals(destinationWalletId)).findFirst().orElseThrow().getEntryType())
+			.isEqualTo(LedgerEntryType.CREDIT);
+	}
+
+	@Test
+	void rejectsTransferWhenSourceBalanceIsInsufficient() throws Exception {
+		UUID sourceWalletId = createWallet("source-002");
+		UUID destinationWalletId = createWallet("destination-002");
+
+		this.mockMvc.perform(post("/api/v1/transfers")
+			.contentType(MediaType.APPLICATION_JSON)
+			.header("Idempotency-Key", "transfer-002")
+			.content("""
+				{
+				  "sourceWalletId": "%s",
+				  "destinationWalletId": "%s",
+				  "amount": 10.00,
+				  "currency": "INR"
+				}
+				""".formatted(sourceWalletId, destinationWalletId)))
+			.andExpect(status().isBadRequest())
+			.andExpect(jsonPath("$.message").value("Validation failed"))
+			.andExpect(jsonPath("$.errors[0].field").value("amount"))
+			.andExpect(jsonPath("$.errors[0].message").value("insufficient available balance"));
+	}
+
+	@Test
+	void rejectsTransferWhenSourceAndDestinationAreTheSame() throws Exception {
+		UUID walletId = createWallet("same-wallet");
+		deposit(walletId, "seed-same-wallet", "50.00");
+
+		this.mockMvc.perform(post("/api/v1/transfers")
+			.contentType(MediaType.APPLICATION_JSON)
+			.header("Idempotency-Key", "transfer-003")
+			.content("""
+				{
+				  "sourceWalletId": "%s",
+				  "destinationWalletId": "%s",
+				  "amount": 10.00,
+				  "currency": "INR"
+				}
+				""".formatted(walletId, walletId)))
+			.andExpect(status().isBadRequest())
+			.andExpect(jsonPath("$.message").value("Validation failed"))
+			.andExpect(jsonPath("$.errors[0].field").value("destinationWalletId"))
+			.andExpect(jsonPath("$.errors[0].message").value("source and destination wallets must be different"));
+	}
+
+	@Test
+	void rejectsTransferWhenIdempotencyKeyIsMissing() throws Exception {
+		UUID sourceWalletId = createWallet("source-003");
+		UUID destinationWalletId = createWallet("destination-003");
+		deposit(sourceWalletId, "seed-source-003", "30.00");
+
+		this.mockMvc.perform(post("/api/v1/transfers")
+			.contentType(MediaType.APPLICATION_JSON)
+			.content("""
+				{
+				  "sourceWalletId": "%s",
+				  "destinationWalletId": "%s",
+				  "amount": 10.00,
+				  "currency": "INR"
+				}
+				""".formatted(sourceWalletId, destinationWalletId)))
+			.andExpect(status().isBadRequest())
+			.andExpect(jsonPath("$.message").value("Validation failed"))
+			.andExpect(jsonPath("$.errors[0].field").value("Idempotency-Key"))
+			.andExpect(jsonPath("$.errors[0].message").value("Idempotency-Key header is required"));
+	}
+
+	@Test
+	void rejectsTransferWhenCurrencyIsUnsupported() throws Exception {
+		UUID sourceWalletId = createWallet("source-004");
+		UUID destinationWalletId = createWallet("destination-004");
+		deposit(sourceWalletId, "seed-source-004", "30.00");
+
+		this.mockMvc.perform(post("/api/v1/transfers")
+			.contentType(MediaType.APPLICATION_JSON)
+			.header("Idempotency-Key", "transfer-004")
+			.content("""
+				{
+				  "sourceWalletId": "%s",
+				  "destinationWalletId": "%s",
+				  "amount": 10.00,
+				  "currency": "USD"
+				}
+				""".formatted(sourceWalletId, destinationWalletId)))
+			.andExpect(status().isBadRequest())
+			.andExpect(jsonPath("$.message").value("Validation failed"))
+			.andExpect(jsonPath("$.errors[0].field").value("currency"))
+			.andExpect(jsonPath("$.errors[0].message").value("currency is unsupported"));
+	}
+
+	@Test
+	void rejectsTransferWhenWalletIsMissing() throws Exception {
+		UUID sourceWalletId = createWallet("source-005");
+		deposit(sourceWalletId, "seed-source-005", "30.00");
+
+		this.mockMvc.perform(post("/api/v1/transfers")
+			.contentType(MediaType.APPLICATION_JSON)
+			.header("Idempotency-Key", "transfer-005")
+			.content("""
+				{
+				  "sourceWalletId": "%s",
+				  "destinationWalletId": "%s",
+				  "amount": 10.00,
+				  "currency": "INR"
+				}
+				""".formatted(sourceWalletId, UUID.randomUUID())))
+			.andExpect(status().isNotFound())
+			.andExpect(jsonPath("$.message").value("Validation failed"))
+			.andExpect(jsonPath("$.errors[0].field").value("destinationWalletId"))
+			.andExpect(jsonPath("$.errors[0].message").value("wallet not found"));
+	}
+
+	@Test
+	void reusesOriginalResultForDuplicateTransferIdempotencyKey() throws Exception {
+		UUID sourceWalletId = createWallet("source-006");
+		UUID destinationWalletId = createWallet("destination-006");
+		deposit(sourceWalletId, "seed-source-006", "120.00");
+
+		MvcResult firstResult = this.mockMvc.perform(post("/api/v1/transfers")
+			.contentType(MediaType.APPLICATION_JSON)
+			.header("Idempotency-Key", "transfer-duplicate")
+			.content("""
+				{
+				  "sourceWalletId": "%s",
+				  "destinationWalletId": "%s",
+				  "amount": 20.00,
+				  "currency": "INR"
+				}
+				""".formatted(sourceWalletId, destinationWalletId)))
+			.andExpect(status().isCreated())
+			.andReturn();
+
+		String firstBody = firstResult.getResponse().getContentAsString();
+		UUID transactionId = UUID.fromString(JsonPath.read(firstBody, "$.transactionId"));
+
+		MvcResult secondResult = this.mockMvc.perform(post("/api/v1/transfers")
+			.contentType(MediaType.APPLICATION_JSON)
+			.header("Idempotency-Key", "transfer-duplicate")
+			.content("""
+				{
+				  "sourceWalletId": "%s",
+				  "destinationWalletId": "%s",
+				  "amount": 20.00,
+				  "currency": "INR"
+				}
+				""".formatted(sourceWalletId, destinationWalletId)))
+			.andExpect(status().isCreated())
+			.andExpect(jsonPath("$.transactionType").value("TRANSFER"))
+			.andExpect(jsonPath("$.transactionStatus").value("SUCCEEDED"))
+			.andReturn();
+
+		assertThat(secondResult.getResponse().getContentAsString()).isEqualTo(firstBody);
+		assertThat(this.walletTransactionRepository.findAll().stream()
+			.filter(tx -> tx.getTransactionType() == WalletTransactionType.TRANSFER))
+			.hasSize(1);
+		assertThat(this.ledgerEntryRepository.findAllByTransactionId(transactionId)).hasSize(2);
+		assertThat(this.walletRepository.findById(sourceWalletId).orElseThrow().getAvailableBalance()).isEqualByComparingTo("100.00");
+		assertThat(this.walletRepository.findById(destinationWalletId).orElseThrow().getAvailableBalance()).isEqualByComparingTo("20.00");
+	}
+
+	private void deposit(UUID walletId, String idempotencyKey, String amount) throws Exception {
+		this.mockMvc.perform(post("/api/v1/wallets/{walletId}/deposit", walletId)
+			.contentType(MediaType.APPLICATION_JSON)
+			.header("Idempotency-Key", idempotencyKey)
+			.content("""
+				{
+				  "amount": %s,
+				  "currency": "INR"
+				}
+				""".formatted(amount)))
+			.andExpect(status().isCreated());
 	}
 
 	private UUID createWallet(String ownerReference) throws Exception {

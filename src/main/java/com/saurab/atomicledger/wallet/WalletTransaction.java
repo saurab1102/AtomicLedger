@@ -24,6 +24,10 @@ public class WalletTransaction {
 	@JoinColumn(name = "wallet_id", nullable = false)
 	private Wallet wallet;
 
+	@ManyToOne(fetch = FetchType.EAGER)
+	@JoinColumn(name = "counterparty_wallet_id")
+	private Wallet counterpartyWallet;
+
 	@Column(name = "idempotency_key", nullable = false, unique = true)
 	private String idempotencyKey;
 
@@ -45,27 +49,34 @@ public class WalletTransaction {
 	@Column(name = "resulting_available_balance", nullable = false, precision = 19, scale = 2)
 	private BigDecimal resultingAvailableBalance;
 
+	@Column(name = "counterparty_resulting_available_balance", precision = 19, scale = 2)
+	private BigDecimal counterpartyResultingAvailableBalance;
+
 	protected WalletTransaction() {
 	}
 
 	public WalletTransaction(
 		UUID id,
 		Wallet wallet,
+		Wallet counterpartyWallet,
 		String idempotencyKey,
 		WalletTransactionType transactionType,
 		WalletTransactionStatus status,
 		BigDecimal amount,
 		WalletCurrency currency,
-		BigDecimal resultingAvailableBalance
+		BigDecimal resultingAvailableBalance,
+		BigDecimal counterpartyResultingAvailableBalance
 	) {
 		this.id = id;
 		this.wallet = wallet;
+		this.counterpartyWallet = counterpartyWallet;
 		this.idempotencyKey = idempotencyKey;
 		this.transactionType = transactionType;
 		this.status = status;
 		this.amount = amount;
 		this.currency = currency;
 		this.resultingAvailableBalance = resultingAvailableBalance;
+		this.counterpartyResultingAvailableBalance = counterpartyResultingAvailableBalance;
 	}
 
 	public UUID getId() {
@@ -78,6 +89,10 @@ public class WalletTransaction {
 
 	public String getIdempotencyKey() {
 		return this.idempotencyKey;
+	}
+
+	public Wallet getCounterpartyWallet() {
+		return this.counterpartyWallet;
 	}
 
 	public WalletTransactionType getTransactionType() {
@@ -98,5 +113,9 @@ public class WalletTransaction {
 
 	public BigDecimal getResultingAvailableBalance() {
 		return this.resultingAvailableBalance;
+	}
+
+	public BigDecimal getCounterpartyResultingAvailableBalance() {
+		return this.counterpartyResultingAvailableBalance;
 	}
 }

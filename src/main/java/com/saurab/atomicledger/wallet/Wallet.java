@@ -69,4 +69,8 @@ public class Wallet {
 	public void credit(BigDecimal amount) {
 		this.availableBalance = this.availableBalance.add(amount);
 	}
+
+	public void debit(BigDecimal amount) {
+		this.availableBalance = this.availableBalance.subtract(amount);
+	}
 }
