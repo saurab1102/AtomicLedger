@@ -1,12 +1,12 @@
 # AtomicLedger Invariants
 
-1. A successful transfer must create one debit ledger entry and one credit ledger entry.
-2. Total debit amount must equal total credit amount for every successful transaction.
-3. A duplicate idempotency key must not create duplicate money movement
-4. Wallet balance and ledger entries must be update in the same database transaction.
-5. Concurrent transfers from the same wallet must not allow overspending.
-6. Failed transactions must not mutate wallet balances.
-7. Ledger entries are immutable after creation.
-8. Reconciliation must detect mismatch between cached balance and ledger-dervied balance.
-9. A successful deposit must create one CREDIT ledger entry.
-10. A duplicate deposit request with the same idempotency key must not increase balance twice.
+1. Ledger entries are immutable after creation.
+2. Every successful money movement must be represented by ledger entries.
+3. Every successful transfer must create exactly one DEBIT ledger entry for the source wallet and one CREDIT ledger entry for the destination wallet.
+4. For every successful transaction, total debit amount must equal total credit amount.
+5. Wallet balance mutations and their corresponding ledger entries must be committed in the same database transaction.
+6. A failed transaction must not mutate wallet balances.
+7. A duplicate request with the same idempotency key must not create duplicate money movement.
+8. Concurrent transfers from the same wallet must not allow overspending.
+9. Wallet balances must never become negative.
+10. Reconciliation must detect mismatch between cached wallet balance and ledger-derived balance.
