@@ -2,9 +2,11 @@ package com.saurab.atomicledger.wallet;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
@@ -165,9 +167,8 @@ public class WalletService {
 			throw new SameWalletTransferException();
 		}
 
-		Map<UUID, Wallet> walletsById = this.walletRepository.findAllById(
-			java.util.List.of(request.sourceWalletId(), request.destinationWalletId())
-		).stream().collect(java.util.stream.Collectors.toMap(Wallet::getId, wallet -> wallet));
+		Map<UUID, Wallet> walletsById = loadWalletsForTransfer(request.sourceWalletId(), request.destinationWalletId()).stream()
+			.collect(Collectors.toMap(Wallet::getId, wallet -> wallet));
 
 		Wallet sourceWallet = Optional.ofNullable(walletsById.get(request.sourceWalletId()))
 			.orElseThrow(() -> new WalletNotFoundException("sourceWalletId", request.sourceWalletId()));
@@ -224,6 +225,14 @@ public class WalletService {
 		destinationWallet.credit(amount);
 
 		return toTransferResponse(transaction);
+	}
+
+	private List<Wallet> loadWalletsForTransfer(UUID sourceWalletId, UUID destinationWalletId) {
+		List<UUID> walletIdsInLockOrder = java.util.stream.Stream.of(sourceWalletId, destinationWalletId)
+			.sorted()
+			.toList();
+
+		return this.walletRepository.findAllByIdInOrderByIdForUpdate(walletIdsInLockOrder);
 	}
 
 	private DepositResponse toDepositResponse(WalletTransaction transaction) {

@@ -5,9 +5,15 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 import com.jayway.jsonpath.JsonPath;
 import org.junit.jupiter.api.BeforeEach;
@@ -487,6 +493,111 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 		assertThat(this.walletRepository.findById(destinationWalletId).orElseThrow().getAvailableBalance()).isEqualByComparingTo("20.00");
 	}
 
+	@Test
+	void allowsOnlyOneSuccessfulConcurrentTransferWhenCombinedAmountExceedsBalance() throws Exception {
+		UUID sourceWalletId = createWallet("source-concurrent");
+		UUID firstDestinationWalletId = createWallet("destination-concurrent-001");
+		UUID secondDestinationWalletId = createWallet("destination-concurrent-002");
+		deposit(sourceWalletId, "seed-concurrent-source", "1000.00");
+
+		try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
+			CountDownLatch ready = new CountDownLatch(2);
+			CountDownLatch start = new CountDownLatch(1);
+
+			Callable<TransferAttemptResult> firstTransfer = concurrentTransfer(
+				ready,
+				start,
+				"transfer-concurrent-800",
+				sourceWalletId,
+				firstDestinationWalletId,
+				"800.00"
+			);
+			Callable<TransferAttemptResult> secondTransfer = concurrentTransfer(
+				ready,
+				start,
+				"transfer-concurrent-700",
+				sourceWalletId,
+				secondDestinationWalletId,
+				"700.00"
+			);
+
+			Future<TransferAttemptResult> firstFuture = executor.submit(firstTransfer);
+			Future<TransferAttemptResult> secondFuture = executor.submit(secondTransfer);
+
+			ready.await();
+			start.countDown();
+
+			List<TransferAttemptResult> results = List.of(firstFuture.get(), secondFuture.get());
+			long successCount = results.stream().filter(result -> result.statusCode() == 201).count();
+			long failureCount = results.stream().filter(result -> result.statusCode() == 400).count();
+
+			assertThat(successCount).isEqualTo(1);
+			assertThat(failureCount).isEqualTo(1);
+
+			TransferAttemptResult failedTransfer = results.stream()
+				.filter(result -> result.statusCode() == 400)
+				.findFirst()
+				.orElseThrow();
+			assertThat(JsonPath.<String>read(failedTransfer.responseBody(), "$.errors[0].field")).isEqualTo("amount");
+			assertThat(JsonPath.<String>read(failedTransfer.responseBody(), "$.errors[0].message")).isEqualTo("insufficient available balance");
+
+			Wallet sourceWallet = this.walletRepository.findById(sourceWalletId).orElseThrow();
+			assertThat(sourceWallet.getAvailableBalance()).isIn(
+				new java.math.BigDecimal("200.00"),
+				new java.math.BigDecimal("300.00")
+			);
+			assertThat(sourceWallet.getAvailableBalance()).isGreaterThanOrEqualTo(new java.math.BigDecimal("0.00"));
+
+			TransferAttemptResult successfulTransfer = results.stream()
+				.filter(result -> result.statusCode() == 201)
+				.findFirst()
+				.orElseThrow();
+			UUID transactionId = UUID.fromString(JsonPath.read(successfulTransfer.responseBody(), "$.transactionId"));
+			List<WalletTransaction> transferTransactions = this.walletTransactionRepository.findAll().stream()
+				.filter(transaction -> transaction.getTransactionType() == WalletTransactionType.TRANSFER)
+				.toList();
+			assertThat(transferTransactions).hasSize(1);
+			assertThat(transferTransactions.getFirst().getId()).isEqualTo(transactionId);
+
+			List<LedgerEntry> transferEntries = new ArrayList<>(this.ledgerEntryRepository.findAllByTransactionId(transactionId));
+			assertThat(transferEntries).hasSize(2);
+			assertThat(transferEntries.stream().map(LedgerEntry::getEntryType))
+				.containsExactlyInAnyOrder(LedgerEntryType.DEBIT, LedgerEntryType.CREDIT);
+		}
+	}
+
+	private Callable<TransferAttemptResult> concurrentTransfer(
+		CountDownLatch ready,
+		CountDownLatch start,
+		String idempotencyKey,
+		UUID sourceWalletId,
+		UUID destinationWalletId,
+		String amount
+	) {
+		return () -> {
+			ready.countDown();
+			start.await();
+
+			MvcResult result = this.mockMvc.perform(post("/api/v1/transfers")
+				.contentType(MediaType.APPLICATION_JSON)
+				.header("Idempotency-Key", idempotencyKey)
+				.content("""
+					{
+					  "sourceWalletId": "%s",
+					  "destinationWalletId": "%s",
+					  "amount": %s,
+					  "currency": "INR"
+					}
+					""".formatted(sourceWalletId, destinationWalletId, amount)))
+				.andReturn();
+
+			return new TransferAttemptResult(
+				result.getResponse().getStatus(),
+				result.getResponse().getContentAsString()
+			);
+		};
+	}
+
 	private void deposit(UUID walletId, String idempotencyKey, String amount) throws Exception {
 		this.mockMvc.perform(post("/api/v1/wallets/{walletId}/deposit", walletId)
 			.contentType(MediaType.APPLICATION_JSON)
@@ -513,5 +624,8 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 			.andReturn();
 
 		return UUID.fromString(JsonPath.read(result.getResponse().getContentAsString(), "$.id"));
+	}
+
+	private record TransferAttemptResult(int statusCode, String responseBody) {
 	}
 }
