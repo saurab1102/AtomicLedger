@@ -21,6 +21,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.test.web.servlet.MockMvc;
@@ -42,6 +43,9 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 
 	@Autowired
 	private LedgerEntryRepository ledgerEntryRepository;
+
+	@Autowired
+	private JdbcTemplate jdbcTemplate;
 
 	@BeforeEach
 	void setUp() {
@@ -566,6 +570,81 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 		}
 	}
 
+	@Test
+	void passesReconciliationForHealthyAccountingData() throws Exception {
+		UUID sourceWalletId = createWallet("recon-source-001");
+		UUID destinationWalletId = createWallet("recon-destination-001");
+		deposit(sourceWalletId, "recon-seed-001", "250.00");
+		transfer("recon-transfer-001", sourceWalletId, destinationWalletId, "100.00");
+
+		this.mockMvc.perform(post("/api/v1/reconciliation/run"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.status").value("PASS"))
+			.andExpect(jsonPath("$.failedChecks").isEmpty());
+	}
+
+	@Test
+	void failsReconciliationForCorruptedWalletBalance() throws Exception {
+		UUID walletId = createWallet("recon-wallet-mismatch");
+		deposit(walletId, "recon-seed-002", "125.00");
+		this.jdbcTemplate.update(
+			"update wallets set available_balance = ? where id = ?",
+			new java.math.BigDecimal("135.00"),
+			walletId
+		);
+
+		this.mockMvc.perform(post("/api/v1/reconciliation/run"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.status").value("FAIL"))
+			.andExpect(jsonPath("$.failedChecks[0].checkType").value("WALLET_BALANCE_MISMATCH"))
+			.andExpect(jsonPath("$.failedChecks[0].entityType").value("WALLET"))
+			.andExpect(jsonPath("$.failedChecks[0].entityId").value(walletId.toString()));
+	}
+
+	@Test
+	void failsReconciliationForMissingLedgerEntry() throws Exception {
+		UUID sourceWalletId = createWallet("recon-source-002");
+		UUID destinationWalletId = createWallet("recon-destination-002");
+		deposit(sourceWalletId, "recon-seed-003", "200.00");
+		UUID transactionId = transfer("recon-transfer-002", sourceWalletId, destinationWalletId, "80.00");
+
+		LedgerEntry creditedEntry = this.ledgerEntryRepository.findAllByTransactionId(transactionId).stream()
+			.filter(entry -> entry.getEntryType() == LedgerEntryType.CREDIT)
+			.findFirst()
+			.orElseThrow();
+		this.jdbcTemplate.update("delete from ledger_entries where id = ?", creditedEntry.getId());
+
+		this.mockMvc.perform(post("/api/v1/reconciliation/run"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.status").value("FAIL"))
+			.andExpect(jsonPath("$.failedChecks[*].checkType").value(org.hamcrest.Matchers.hasItem("TRANSFER_LEDGER_STRUCTURE_MISMATCH")))
+			.andExpect(jsonPath("$.failedChecks[*].entityId").value(org.hamcrest.Matchers.hasItem(transactionId.toString())));
+	}
+
+	@Test
+	void failsReconciliationForUnbalancedTransferLedgerEntries() throws Exception {
+		UUID sourceWalletId = createWallet("recon-source-003");
+		UUID destinationWalletId = createWallet("recon-destination-003");
+		deposit(sourceWalletId, "recon-seed-004", "220.00");
+		UUID transactionId = transfer("recon-transfer-003", sourceWalletId, destinationWalletId, "90.00");
+
+		LedgerEntry debitEntry = this.ledgerEntryRepository.findAllByTransactionId(transactionId).stream()
+			.filter(entry -> entry.getEntryType() == LedgerEntryType.DEBIT)
+			.findFirst()
+			.orElseThrow();
+		this.jdbcTemplate.update(
+			"update ledger_entries set amount = ? where id = ?",
+			new java.math.BigDecimal("95.00"),
+			debitEntry.getId()
+		);
+
+		this.mockMvc.perform(post("/api/v1/reconciliation/run"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.status").value("FAIL"))
+			.andExpect(jsonPath("$.failedChecks[*].checkType").value(org.hamcrest.Matchers.hasItem("TRANSFER_LEDGER_AMOUNT_MISMATCH")))
+			.andExpect(jsonPath("$.failedChecks[*].entityId").value(org.hamcrest.Matchers.hasItem(transactionId.toString())));
+	}
+
 	private Callable<TransferAttemptResult> concurrentTransfer(
 		CountDownLatch ready,
 		CountDownLatch start,
@@ -596,6 +675,24 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 				result.getResponse().getContentAsString()
 			);
 		};
+	}
+
+	private UUID transfer(String idempotencyKey, UUID sourceWalletId, UUID destinationWalletId, String amount) throws Exception {
+		MvcResult result = this.mockMvc.perform(post("/api/v1/transfers")
+			.contentType(MediaType.APPLICATION_JSON)
+			.header("Idempotency-Key", idempotencyKey)
+			.content("""
+				{
+				  "sourceWalletId": "%s",
+				  "destinationWalletId": "%s",
+				  "amount": %s,
+				  "currency": "INR"
+				}
+				""".formatted(sourceWalletId, destinationWalletId, amount)))
+			.andExpect(status().isCreated())
+			.andReturn();
+
+		return UUID.fromString(JsonPath.read(result.getResponse().getContentAsString(), "$.transactionId"));
 	}
 
 	private void deposit(UUID walletId, String idempotencyKey, String amount) throws Exception {
