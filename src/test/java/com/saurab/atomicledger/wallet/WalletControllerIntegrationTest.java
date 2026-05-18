@@ -1,6 +1,7 @@
 package com.saurab.atomicledger.wallet;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -47,8 +48,12 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 	@Autowired
 	private JdbcTemplate jdbcTemplate;
 
+	@Autowired
+	private AuditLogRepository auditLogRepository;
+
 	@BeforeEach
 	void setUp() {
+		this.auditLogRepository.deleteAll();
 		this.ledgerEntryRepository.deleteAll();
 		this.walletTransactionRepository.deleteAll();
 		this.walletRepository.deleteAll();
@@ -643,6 +648,128 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 			.andExpect(jsonPath("$.status").value("FAIL"))
 			.andExpect(jsonPath("$.failedChecks[*].checkType").value(org.hamcrest.Matchers.hasItem("TRANSFER_LEDGER_AMOUNT_MISMATCH")))
 			.andExpect(jsonPath("$.failedChecks[*].entityId").value(org.hamcrest.Matchers.hasItem(transactionId.toString())));
+	}
+
+	@Test
+	void createsAuditLogsForWalletCreationDepositAndTransferAndSupportsAuditLogFiltering() throws Exception {
+		UUID sourceWalletId = createWallet("audit-source-001");
+		deposit(sourceWalletId, "audit-deposit-001", "150.00");
+		UUID destinationWalletId = createWallet("audit-destination-001");
+		UUID transferTransactionId = transfer("audit-transfer-001", sourceWalletId, destinationWalletId, "40.00");
+
+		assertThat(this.auditLogRepository.findAll().stream().map(AuditLog::getAction))
+			.contains(
+				AuditAction.WALLET_CREATED,
+				AuditAction.DEPOSIT_SUCCEEDED,
+				AuditAction.TRANSFER_SUCCEEDED
+			);
+
+		this.mockMvc.perform(get("/api/v1/audit-logs")
+			.param("entityType", "TRANSACTION")
+			.param("entityId", transferTransactionId.toString()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$[0].action").value("TRANSFER_SUCCEEDED"))
+			.andExpect(jsonPath("$[0].entityType").value("TRANSACTION"))
+			.andExpect(jsonPath("$[0].entityId").value(transferTransactionId.toString()));
+	}
+
+	@Test
+	void createsAuditLogsForDuplicateIdempotencyRequestsAndFailedTransfer() throws Exception {
+		UUID depositWalletId = createWallet("audit-depositor-duplicate");
+
+		this.mockMvc.perform(post("/api/v1/wallets/{walletId}/deposit", depositWalletId)
+			.contentType(MediaType.APPLICATION_JSON)
+			.header("Idempotency-Key", "audit-deposit-duplicate")
+			.content("""
+				{
+				  "amount": 70.00,
+				  "currency": "INR"
+				}
+				"""))
+			.andExpect(status().isCreated());
+		this.mockMvc.perform(post("/api/v1/wallets/{walletId}/deposit", depositWalletId)
+			.contentType(MediaType.APPLICATION_JSON)
+			.header("Idempotency-Key", "audit-deposit-duplicate")
+			.content("""
+				{
+				  "amount": 70.00,
+				  "currency": "INR"
+				}
+				"""))
+			.andExpect(status().isCreated());
+
+		UUID sourceWalletId = createWallet("audit-source-002");
+		UUID destinationWalletId = createWallet("audit-destination-002");
+		deposit(sourceWalletId, "audit-seed-source-002", "100.00");
+		this.mockMvc.perform(post("/api/v1/transfers")
+			.contentType(MediaType.APPLICATION_JSON)
+			.header("Idempotency-Key", "audit-transfer-duplicate")
+			.content("""
+				{
+				  "sourceWalletId": "%s",
+				  "destinationWalletId": "%s",
+				  "amount": 20.00,
+				  "currency": "INR"
+				}
+				""".formatted(sourceWalletId, destinationWalletId)))
+			.andExpect(status().isCreated());
+		this.mockMvc.perform(post("/api/v1/transfers")
+			.contentType(MediaType.APPLICATION_JSON)
+			.header("Idempotency-Key", "audit-transfer-duplicate")
+			.content("""
+				{
+				  "sourceWalletId": "%s",
+				  "destinationWalletId": "%s",
+				  "amount": 20.00,
+				  "currency": "INR"
+				}
+				""".formatted(sourceWalletId, destinationWalletId)))
+			.andExpect(status().isCreated());
+
+		UUID failedSourceWalletId = createWallet("audit-source-failed");
+		UUID failedDestinationWalletId = createWallet("audit-destination-failed");
+		this.mockMvc.perform(post("/api/v1/transfers")
+			.contentType(MediaType.APPLICATION_JSON)
+			.header("Idempotency-Key", "audit-transfer-insufficient")
+			.content("""
+				{
+				  "sourceWalletId": "%s",
+				  "destinationWalletId": "%s",
+				  "amount": 10.00,
+				  "currency": "INR"
+				}
+				""".formatted(failedSourceWalletId, failedDestinationWalletId)))
+			.andExpect(status().isBadRequest());
+
+		assertThat(this.auditLogRepository.findAll().stream().map(AuditLog::getAction))
+			.contains(
+				AuditAction.DEPOSIT_DUPLICATE_REPLAY,
+				AuditAction.TRANSFER_DUPLICATE_REPLAY,
+				AuditAction.TRANSFER_INSUFFICIENT_BALANCE
+			);
+	}
+
+	@Test
+	void createsAuditLogsForReconciliationRunsAndFailures() throws Exception {
+		UUID walletId = createWallet("audit-reconciliation-wallet");
+		deposit(walletId, "audit-reconciliation-seed", "90.00");
+
+		this.mockMvc.perform(post("/api/v1/reconciliation/run"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.status").value("PASS"));
+
+		this.jdbcTemplate.update(
+			"update wallets set available_balance = ? where id = ?",
+			new java.math.BigDecimal("95.00"),
+			walletId
+		);
+
+		this.mockMvc.perform(post("/api/v1/reconciliation/run"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.status").value("FAIL"));
+
+		assertThat(this.auditLogRepository.findAll().stream().map(AuditLog::getAction))
+			.contains(AuditAction.RECONCILIATION_RUN, AuditAction.RECONCILIATION_FAILED);
 	}
 
 	private Callable<TransferAttemptResult> concurrentTransfer(

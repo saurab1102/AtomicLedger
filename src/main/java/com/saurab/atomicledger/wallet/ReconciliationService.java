@@ -22,18 +22,21 @@ public class ReconciliationService {
 	private final WalletRepository walletRepository;
 	private final WalletTransactionRepository walletTransactionRepository;
 	private final LedgerEntryRepository ledgerEntryRepository;
+	private final AuditLogService auditLogService;
 
 	public ReconciliationService(
 		WalletRepository walletRepository,
 		WalletTransactionRepository walletTransactionRepository,
-		LedgerEntryRepository ledgerEntryRepository
+		LedgerEntryRepository ledgerEntryRepository,
+		AuditLogService auditLogService
 	) {
 		this.walletRepository = walletRepository;
 		this.walletTransactionRepository = walletTransactionRepository;
 		this.ledgerEntryRepository = ledgerEntryRepository;
+		this.auditLogService = auditLogService;
 	}
 
-	@Transactional(readOnly = true)
+	@Transactional
 	public ReconciliationResponse run() {
 		List<ReconciliationFailedCheckResponse> failedChecks = new ArrayList<>();
 
@@ -42,6 +45,20 @@ public class ReconciliationService {
 		reconcileDeposits(failedChecks);
 
 		ReconciliationStatus status = failedChecks.isEmpty() ? ReconciliationStatus.PASS : ReconciliationStatus.FAIL;
+		this.auditLogService.recordInCurrentTransaction(
+			AuditAction.RECONCILIATION_RUN,
+			AuditEntityType.RECONCILIATION,
+			"reconciliation",
+			Map.of("status", status.name(), "failedCheckCount", failedChecks.size())
+		);
+		if (status == ReconciliationStatus.FAIL) {
+			this.auditLogService.recordInCurrentTransaction(
+				AuditAction.RECONCILIATION_FAILED,
+				AuditEntityType.RECONCILIATION,
+				"reconciliation",
+				Map.of("failedCheckCount", failedChecks.size())
+			);
+		}
 		return new ReconciliationResponse(status.name(), failedChecks);
 	}
 

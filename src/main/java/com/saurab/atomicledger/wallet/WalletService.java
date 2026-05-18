@@ -29,17 +29,20 @@ public class WalletService {
 	private final WalletRepository walletRepository;
 	private final WalletTransactionRepository walletTransactionRepository;
 	private final LedgerEntryRepository ledgerEntryRepository;
+	private final AuditLogService auditLogService;
 	private final TransactionTemplate transactionTemplate;
 
 	public WalletService(
 		WalletRepository walletRepository,
 		WalletTransactionRepository walletTransactionRepository,
 		LedgerEntryRepository ledgerEntryRepository,
+		AuditLogService auditLogService,
 		PlatformTransactionManager transactionManager
 	) {
 		this.walletRepository = walletRepository;
 		this.walletTransactionRepository = walletTransactionRepository;
 		this.ledgerEntryRepository = ledgerEntryRepository;
+		this.auditLogService = auditLogService;
 		this.transactionTemplate = new TransactionTemplate(transactionManager);
 	}
 
@@ -56,6 +59,12 @@ public class WalletService {
 		);
 
 		Wallet savedWallet = this.walletRepository.save(wallet);
+		this.auditLogService.recordInCurrentTransaction(
+			AuditAction.WALLET_CREATED,
+			AuditEntityType.WALLET,
+			savedWallet.getId().toString(),
+			Map.of("ownerReference", savedWallet.getOwnerReference(), "currency", savedWallet.getCurrency().name())
+		);
 
 		return new WalletResponse(
 			savedWallet.getId(),
@@ -71,6 +80,7 @@ public class WalletService {
 		Optional<WalletTransaction> existingTransaction = this.walletTransactionRepository.findByIdempotencyKey(normalizedIdempotencyKey);
 
 		if (existingTransaction.isPresent()) {
+			recordDuplicateDepositAudit(existingTransaction.get());
 			return toDepositResponse(existingTransaction.get());
 		}
 
@@ -82,7 +92,10 @@ public class WalletService {
 		}
 		catch (DataIntegrityViolationException exception) {
 			return this.walletTransactionRepository.findByIdempotencyKey(normalizedIdempotencyKey)
-				.map(this::toDepositResponse)
+				.map(transaction -> {
+					recordDuplicateDepositAudit(transaction);
+					return toDepositResponse(transaction);
+				})
 				.orElseThrow(() -> exception);
 		}
 	}
@@ -126,6 +139,16 @@ public class WalletService {
 		));
 
 		wallet.credit(amount);
+		this.auditLogService.recordInCurrentTransaction(
+			AuditAction.DEPOSIT_SUCCEEDED,
+			AuditEntityType.TRANSACTION,
+			transaction.getId().toString(),
+			Map.of(
+				"walletId", wallet.getId().toString(),
+				"amount", amount,
+				"currency", currency.name()
+			)
+		);
 
 		return toDepositResponse(transaction);
 	}
@@ -135,6 +158,7 @@ public class WalletService {
 		Optional<WalletTransaction> existingTransaction = this.walletTransactionRepository.findByIdempotencyKey(normalizedIdempotencyKey);
 
 		if (existingTransaction.isPresent()) {
+			recordDuplicateTransferAudit(existingTransaction.get());
 			return toTransferResponse(existingTransaction.get());
 		}
 
@@ -146,8 +170,15 @@ public class WalletService {
 		}
 		catch (DataIntegrityViolationException exception) {
 			return this.walletTransactionRepository.findByIdempotencyKey(normalizedIdempotencyKey)
-				.map(this::toTransferResponse)
+				.map(transaction -> {
+					recordDuplicateTransferAudit(transaction);
+					return toTransferResponse(transaction);
+				})
 				.orElseThrow(() -> exception);
+		}
+		catch (InsufficientAvailableBalanceException exception) {
+			recordInsufficientTransferAudit(request.sourceWalletId(), request.destinationWalletId(), amount, currency);
+			throw exception;
 		}
 	}
 
@@ -223,6 +254,17 @@ public class WalletService {
 
 		sourceWallet.debit(amount);
 		destinationWallet.credit(amount);
+		this.auditLogService.recordInCurrentTransaction(
+			AuditAction.TRANSFER_SUCCEEDED,
+			AuditEntityType.TRANSACTION,
+			transaction.getId().toString(),
+			Map.of(
+				"sourceWalletId", sourceWallet.getId().toString(),
+				"destinationWalletId", destinationWallet.getId().toString(),
+				"amount", amount,
+				"currency", currency.name()
+			)
+		);
 
 		return toTransferResponse(transaction);
 	}
@@ -269,5 +311,49 @@ public class WalletService {
 			throw new MissingIdempotencyKeyException();
 		}
 		return idempotencyKey.trim();
+	}
+
+	private void recordDuplicateDepositAudit(WalletTransaction transaction) {
+		this.auditLogService.recordStandalone(
+			AuditAction.DEPOSIT_DUPLICATE_REPLAY,
+			AuditEntityType.WALLET,
+			transaction.getWallet().getId().toString(),
+			Map.of(
+				"transactionId", transaction.getId().toString(),
+				"idempotencyKey", transaction.getIdempotencyKey()
+			)
+		);
+	}
+
+	private void recordDuplicateTransferAudit(WalletTransaction transaction) {
+		this.auditLogService.recordStandalone(
+			AuditAction.TRANSFER_DUPLICATE_REPLAY,
+			AuditEntityType.TRANSACTION,
+			transaction.getId().toString(),
+			Map.of(
+				"sourceWalletId", transaction.getWallet().getId().toString(),
+				"destinationWalletId", transaction.getCounterpartyWallet().getId().toString(),
+				"idempotencyKey", transaction.getIdempotencyKey()
+			)
+		);
+	}
+
+	private void recordInsufficientTransferAudit(
+		UUID sourceWalletId,
+		UUID destinationWalletId,
+		BigDecimal amount,
+		WalletCurrency currency
+	) {
+		this.auditLogService.recordStandalone(
+			AuditAction.TRANSFER_INSUFFICIENT_BALANCE,
+			AuditEntityType.WALLET,
+			sourceWalletId.toString(),
+			Map.of(
+				"sourceWalletId", sourceWalletId.toString(),
+				"destinationWalletId", destinationWalletId.toString(),
+				"amount", amount,
+				"currency", currency.name()
+			)
+		);
 	}
 }

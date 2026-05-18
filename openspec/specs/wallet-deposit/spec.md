@@ -1,3 +1,8 @@
+## Purpose
+Describe how deposits are validated, recorded, and applied to wallet balances.
+
+## Requirements
+
 ### Requirement: Deposit funds through the wallet API
 The system SHALL provide `POST /api/v1/wallets/{walletId}/deposit` to deposit funds into a wallet using a JSON request body containing `amount` and `currency`, plus a required `Idempotency-Key` header.
 
@@ -40,3 +45,14 @@ The system SHALL not create another transaction, ledger entry, or balance update
 #### Scenario: Duplicate idempotency key is retried
 - **WHEN** a client repeats a previously successful deposit request using the same `Idempotency-Key`
 - **THEN** the system returns the original deposit result and does not create additional transaction records, ledger entries, or balance changes
+
+### Requirement: Audit successful and duplicate deposit handling
+The system SHALL record an audit log for every successful deposit and for every duplicate deposit request replayed through idempotency handling.
+
+#### Scenario: Successful deposit is audited
+- **WHEN** a deposit request succeeds
+- **THEN** the system stores an audit log describing the successful deposit action
+
+#### Scenario: Duplicate deposit replay is audited
+- **WHEN** a client repeats a previously successful deposit request using the same `Idempotency-Key`
+- **THEN** the system stores an audit log describing the duplicate deposit replay

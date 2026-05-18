@@ -1,3 +1,8 @@
+## Purpose
+Describe wallet creation rules and the preconditions for wallet-based operations.
+
+## Requirements
+
 ### Requirement: Create wallet through API
 The system SHALL provide `POST /api/v1/wallets` to create a wallet from a JSON request containing `ownerReference` and `currency`.
 
@@ -55,3 +60,10 @@ The system SHALL allow transfers only when both `sourceWalletId` and `destinatio
 #### Scenario: One wallet is not active
 - **WHEN** a client sends `POST /api/v1/transfers` where either the source wallet or destination wallet is not `ACTIVE`
 - **THEN** the system rejects the request and does not create any transfer transaction, ledger entry, or balance update
+
+### Requirement: Audit wallet creation
+The system SHALL record an audit log when a wallet is created successfully.
+
+#### Scenario: Wallet creation is audited
+- **WHEN** a wallet creation request succeeds
+- **THEN** the system stores an audit log describing the wallet creation action for the created wallet

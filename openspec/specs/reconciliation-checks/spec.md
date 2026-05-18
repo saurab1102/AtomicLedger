@@ -1,3 +1,8 @@
+## Purpose
+Describe how reconciliation is run and which accounting invariants it checks.
+
+## Requirements
+
 ### Requirement: Run reconciliation through the API
 The system SHALL provide `POST /api/v1/reconciliation/run` to execute reconciliation checks over wallet balances, successful deposit transactions, successful transfer transactions, and their ledger entries.
 
@@ -36,3 +41,14 @@ The system SHALL return reconciliation results with overall status `PASS` or `FA
 #### Scenario: Multiple reconciliation failures are reported
 - **WHEN** reconciliation detects one or more wallet or transaction integrity failures
 - **THEN** the response contains status `FAIL` and structured failed-check detail records for each detected failure
+
+### Requirement: Audit reconciliation runs and failures
+The system SHALL record an audit log for every reconciliation run and SHALL record a reconciliation failure audit log when a run returns failed checks.
+
+#### Scenario: Reconciliation run is audited
+- **WHEN** a client sends `POST /api/v1/reconciliation/run`
+- **THEN** the system stores an audit log describing the reconciliation run
+
+#### Scenario: Reconciliation failure is audited
+- **WHEN** a reconciliation run returns status `FAIL`
+- **THEN** the system stores an audit log describing the reconciliation failure
