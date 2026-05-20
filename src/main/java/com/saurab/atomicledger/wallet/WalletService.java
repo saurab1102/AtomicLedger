@@ -30,6 +30,7 @@ public class WalletService {
 	private final WalletTransactionRepository walletTransactionRepository;
 	private final LedgerEntryRepository ledgerEntryRepository;
 	private final AuditLogService auditLogService;
+	private final OutboxEventService outboxEventService;
 	private final TransactionTemplate transactionTemplate;
 
 	public WalletService(
@@ -37,12 +38,14 @@ public class WalletService {
 		WalletTransactionRepository walletTransactionRepository,
 		LedgerEntryRepository ledgerEntryRepository,
 		AuditLogService auditLogService,
+		OutboxEventService outboxEventService,
 		PlatformTransactionManager transactionManager
 	) {
 		this.walletRepository = walletRepository;
 		this.walletTransactionRepository = walletTransactionRepository;
 		this.ledgerEntryRepository = ledgerEntryRepository;
 		this.auditLogService = auditLogService;
+		this.outboxEventService = outboxEventService;
 		this.transactionTemplate = new TransactionTemplate(transactionManager);
 	}
 
@@ -62,6 +65,12 @@ public class WalletService {
 		this.auditLogService.recordInCurrentTransaction(
 			AuditAction.WALLET_CREATED,
 			AuditEntityType.WALLET,
+			savedWallet.getId().toString(),
+			Map.of("ownerReference", savedWallet.getOwnerReference(), "currency", savedWallet.getCurrency().name())
+		);
+		this.outboxEventService.recordInCurrentTransaction(
+			OutboxEventType.WALLET_CREATED,
+			OutboxAggregateType.WALLET,
 			savedWallet.getId().toString(),
 			Map.of("ownerReference", savedWallet.getOwnerReference(), "currency", savedWallet.getCurrency().name())
 		);
@@ -149,6 +158,16 @@ public class WalletService {
 				"currency", currency.name()
 			)
 		);
+		this.outboxEventService.recordInCurrentTransaction(
+			OutboxEventType.DEPOSIT_SUCCEEDED,
+			OutboxAggregateType.TRANSACTION,
+			transaction.getId().toString(),
+			Map.of(
+				"walletId", wallet.getId().toString(),
+				"amount", amount,
+				"currency", currency.name()
+			)
+		);
 
 		return toDepositResponse(transaction);
 	}
@@ -166,7 +185,16 @@ public class WalletService {
 		BigDecimal amount = request.amount().setScale(2, RoundingMode.HALF_UP);
 
 		try {
-			return this.transactionTemplate.execute(status -> createTransfer(normalizedIdempotencyKey, request, amount, currency));
+			TransferAttemptResult transferAttemptResult = this.transactionTemplate.execute(
+				status -> createTransfer(normalizedIdempotencyKey, request, amount, currency)
+			);
+			if (transferAttemptResult == null) {
+				throw new IllegalStateException("transfer transaction returned no result");
+			}
+			if (transferAttemptResult.failed()) {
+				throw new InsufficientAvailableBalanceException();
+			}
+			return transferAttemptResult.response();
 		}
 		catch (DataIntegrityViolationException exception) {
 			return this.walletTransactionRepository.findByIdempotencyKey(normalizedIdempotencyKey)
@@ -176,13 +204,9 @@ public class WalletService {
 				})
 				.orElseThrow(() -> exception);
 		}
-		catch (InsufficientAvailableBalanceException exception) {
-			recordInsufficientTransferAudit(request.sourceWalletId(), request.destinationWalletId(), amount, currency);
-			throw exception;
-		}
 	}
 
-	private TransferResponse createTransfer(
+	private TransferAttemptResult createTransfer(
 		String idempotencyKey,
 		CreateTransferRequest request,
 		BigDecimal amount,
@@ -191,7 +215,7 @@ public class WalletService {
 		Optional<WalletTransaction> existingTransaction = this.walletTransactionRepository.findByIdempotencyKey(idempotencyKey);
 
 		if (existingTransaction.isPresent()) {
-			return toTransferResponse(existingTransaction.get());
+			return TransferAttemptResult.success(toTransferResponse(existingTransaction.get()));
 		}
 
 		if (request.sourceWalletId().equals(request.destinationWalletId())) {
@@ -216,7 +240,19 @@ public class WalletService {
 			throw new WalletCurrencyMismatchException();
 		}
 		if (sourceWallet.getAvailableBalance().compareTo(amount) < 0) {
-			throw new InsufficientAvailableBalanceException();
+			recordInsufficientTransferAudit(sourceWallet.getId(), destinationWallet.getId(), amount, currency);
+			this.outboxEventService.recordInCurrentTransaction(
+				OutboxEventType.TRANSFER_INSUFFICIENT_BALANCE,
+				OutboxAggregateType.WALLET,
+				sourceWallet.getId().toString(),
+				Map.of(
+					"sourceWalletId", sourceWallet.getId().toString(),
+					"destinationWalletId", destinationWallet.getId().toString(),
+					"amount", amount,
+					"currency", currency.name()
+				)
+			);
+			return TransferAttemptResult.failure();
 		}
 
 		BigDecimal sourceAvailableBalance = sourceWallet.getAvailableBalance().subtract(amount);
@@ -265,8 +301,19 @@ public class WalletService {
 				"currency", currency.name()
 			)
 		);
+		this.outboxEventService.recordInCurrentTransaction(
+			OutboxEventType.TRANSFER_SUCCEEDED,
+			OutboxAggregateType.TRANSACTION,
+			transaction.getId().toString(),
+			Map.of(
+				"sourceWalletId", sourceWallet.getId().toString(),
+				"destinationWalletId", destinationWallet.getId().toString(),
+				"amount", amount,
+				"currency", currency.name()
+			)
+		);
 
-		return toTransferResponse(transaction);
+		return TransferAttemptResult.success(toTransferResponse(transaction));
 	}
 
 	private List<Wallet> loadWalletsForTransfer(UUID sourceWalletId, UUID destinationWalletId) {
@@ -344,7 +391,7 @@ public class WalletService {
 		BigDecimal amount,
 		WalletCurrency currency
 	) {
-		this.auditLogService.recordStandalone(
+		this.auditLogService.recordInCurrentTransaction(
 			AuditAction.TRANSFER_INSUFFICIENT_BALANCE,
 			AuditEntityType.WALLET,
 			sourceWalletId.toString(),
@@ -355,5 +402,16 @@ public class WalletService {
 				"currency", currency.name()
 			)
 		);
+	}
+
+	private record TransferAttemptResult(TransferResponse response, boolean failed) {
+
+		private static TransferAttemptResult success(TransferResponse response) {
+			return new TransferAttemptResult(response, false);
+		}
+
+		private static TransferAttemptResult failure() {
+			return new TransferAttemptResult(null, true);
+		}
 	}
 }

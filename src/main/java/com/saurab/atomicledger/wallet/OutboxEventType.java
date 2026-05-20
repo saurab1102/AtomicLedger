@@ -1,0 +1,9 @@
+package com.saurab.atomicledger.wallet;
+
+public enum OutboxEventType {
+	WALLET_CREATED,
+	DEPOSIT_SUCCEEDED,
+	TRANSFER_SUCCEEDED,
+	TRANSFER_INSUFFICIENT_BALANCE,
+	RECONCILIATION_FAILED
+}

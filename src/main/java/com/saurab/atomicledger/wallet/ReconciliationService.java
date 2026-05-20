@@ -23,17 +23,20 @@ public class ReconciliationService {
 	private final WalletTransactionRepository walletTransactionRepository;
 	private final LedgerEntryRepository ledgerEntryRepository;
 	private final AuditLogService auditLogService;
+	private final OutboxEventService outboxEventService;
 
 	public ReconciliationService(
 		WalletRepository walletRepository,
 		WalletTransactionRepository walletTransactionRepository,
 		LedgerEntryRepository ledgerEntryRepository,
-		AuditLogService auditLogService
+		AuditLogService auditLogService,
+		OutboxEventService outboxEventService
 	) {
 		this.walletRepository = walletRepository;
 		this.walletTransactionRepository = walletTransactionRepository;
 		this.ledgerEntryRepository = ledgerEntryRepository;
 		this.auditLogService = auditLogService;
+		this.outboxEventService = outboxEventService;
 	}
 
 	@Transactional
@@ -57,6 +60,12 @@ public class ReconciliationService {
 				AuditEntityType.RECONCILIATION,
 				"reconciliation",
 				Map.of("failedCheckCount", failedChecks.size())
+			);
+			this.outboxEventService.recordInCurrentTransaction(
+				OutboxEventType.RECONCILIATION_FAILED,
+				OutboxAggregateType.RECONCILIATION,
+				"reconciliation",
+				Map.of("status", status.name(), "failedCheckCount", failedChecks.size())
 			);
 		}
 		return new ReconciliationResponse(status.name(), failedChecks);

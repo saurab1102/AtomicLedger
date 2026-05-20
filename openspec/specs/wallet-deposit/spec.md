@@ -1,8 +1,6 @@
 ## Purpose
 Describe how deposits are validated, recorded, and applied to wallet balances.
-
 ## Requirements
-
 ### Requirement: Deposit funds through the wallet API
 The system SHALL provide `POST /api/v1/wallets/{walletId}/deposit` to deposit funds into a wallet using a JSON request body containing `amount` and `currency`, plus a required `Idempotency-Key` header.
 
@@ -56,3 +54,11 @@ The system SHALL record an audit log for every successful deposit and for every 
 #### Scenario: Duplicate deposit replay is audited
 - **WHEN** a client repeats a previously successful deposit request using the same `Idempotency-Key`
 - **THEN** the system stores an audit log describing the duplicate deposit replay
+
+### Requirement: Create an outbox event for successful deposits
+The system SHALL persist an outbox event when a deposit request succeeds.
+
+#### Scenario: Successful deposit writes an outbox event
+- **WHEN** a deposit request succeeds
+- **THEN** the system stores a `PENDING` outbox event for the committed deposit in the same transaction as the deposit records
+

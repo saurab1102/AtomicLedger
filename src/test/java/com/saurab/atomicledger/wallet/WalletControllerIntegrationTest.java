@@ -29,7 +29,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import com.saurab.atomicledger.PostgresIntegrationTest;
 
-@SpringBootTest
+@SpringBootTest(properties = "spring.task.scheduling.enabled=false")
 @AutoConfigureMockMvc
 class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 
@@ -51,8 +51,15 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 	@Autowired
 	private AuditLogRepository auditLogRepository;
 
+	@Autowired
+	private OutboxEventRepository outboxEventRepository;
+
+	@Autowired
+	private OutboxEventWorker outboxEventWorker;
+
 	@BeforeEach
 	void setUp() {
+		this.outboxEventRepository.deleteAll();
 		this.auditLogRepository.deleteAll();
 		this.ledgerEntryRepository.deleteAll();
 		this.walletTransactionRepository.deleteAll();
@@ -674,6 +681,37 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 	}
 
 	@Test
+	void createsOutboxEventsForWalletCreationDepositAndTransferAndSupportsInspectionEndpoint() throws Exception {
+		UUID sourceWalletId = createWallet("outbox-source-001");
+		deposit(sourceWalletId, "outbox-deposit-001", "150.00");
+		UUID destinationWalletId = createWallet("outbox-destination-001");
+		UUID transferTransactionId = transfer("outbox-transfer-001", sourceWalletId, destinationWalletId, "40.00");
+
+		assertThat(this.outboxEventRepository.findAll().stream().map(OutboxEvent::getEventType))
+			.contains(
+				OutboxEventType.WALLET_CREATED,
+				OutboxEventType.DEPOSIT_SUCCEEDED,
+				OutboxEventType.TRANSFER_SUCCEEDED
+			);
+
+		OutboxEvent transferEvent = this.outboxEventRepository.findAll().stream()
+			.filter(event -> event.getEventType() == OutboxEventType.TRANSFER_SUCCEEDED)
+			.filter(event -> event.getAggregateId().equals(transferTransactionId.toString()))
+			.findFirst()
+			.orElseThrow();
+		assertThat(transferEvent.getStatus()).isEqualTo(OutboxEventStatus.PENDING);
+
+		this.mockMvc.perform(get("/api/v1/outbox-events"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$[*].eventType").value(org.hamcrest.Matchers.hasItems(
+				"WALLET_CREATED",
+				"DEPOSIT_SUCCEEDED",
+				"TRANSFER_SUCCEEDED"
+			)))
+			.andExpect(jsonPath("$[*].aggregateId").value(org.hamcrest.Matchers.hasItem(transferTransactionId.toString())));
+	}
+
+	@Test
 	void createsAuditLogsForDuplicateIdempotencyRequestsAndFailedTransfer() throws Exception {
 		UUID depositWalletId = createWallet("audit-depositor-duplicate");
 
@@ -750,6 +788,37 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 	}
 
 	@Test
+	void createsFailureOutboxEventForInsufficientBalanceTransfer() throws Exception {
+		UUID sourceWalletId = createWallet("outbox-source-failed");
+		UUID destinationWalletId = createWallet("outbox-destination-failed");
+
+		this.mockMvc.perform(post("/api/v1/transfers")
+			.contentType(MediaType.APPLICATION_JSON)
+			.header("Idempotency-Key", "outbox-transfer-insufficient")
+			.content("""
+				{
+				  "sourceWalletId": "%s",
+				  "destinationWalletId": "%s",
+				  "amount": 10.00,
+				  "currency": "INR"
+				}
+				""".formatted(sourceWalletId, destinationWalletId)))
+			.andExpect(status().isBadRequest());
+
+		OutboxEvent failureEvent = this.outboxEventRepository.findAll().stream()
+			.filter(event -> event.getEventType() == OutboxEventType.TRANSFER_INSUFFICIENT_BALANCE)
+			.findFirst()
+			.orElseThrow();
+		assertThat(failureEvent.getAggregateType()).isEqualTo(OutboxAggregateType.WALLET);
+		assertThat(failureEvent.getAggregateId()).isEqualTo(sourceWalletId.toString());
+		assertThat(failureEvent.getStatus()).isEqualTo(OutboxEventStatus.PENDING);
+		assertThat(failureEvent.getPayload())
+			.containsEntry("sourceWalletId", sourceWalletId.toString())
+			.containsEntry("destinationWalletId", destinationWalletId.toString())
+			.containsEntry("currency", "INR");
+	}
+
+	@Test
 	void createsAuditLogsForReconciliationRunsAndFailures() throws Exception {
 		UUID walletId = createWallet("audit-reconciliation-wallet");
 		deposit(walletId, "audit-reconciliation-seed", "90.00");
@@ -770,6 +839,50 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 
 		assertThat(this.auditLogRepository.findAll().stream().map(AuditLog::getAction))
 			.contains(AuditAction.RECONCILIATION_RUN, AuditAction.RECONCILIATION_FAILED);
+	}
+
+	@Test
+	void createsOutboxEventForFailedReconciliationRun() throws Exception {
+		UUID walletId = createWallet("outbox-reconciliation-wallet");
+		deposit(walletId, "outbox-reconciliation-seed", "90.00");
+
+		this.jdbcTemplate.update(
+			"update wallets set available_balance = ? where id = ?",
+			new java.math.BigDecimal("95.00"),
+			walletId
+		);
+
+		this.mockMvc.perform(post("/api/v1/reconciliation/run"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.status").value("FAIL"));
+
+		OutboxEvent reconciliationEvent = this.outboxEventRepository.findAll().stream()
+			.filter(event -> event.getEventType() == OutboxEventType.RECONCILIATION_FAILED)
+			.findFirst()
+			.orElseThrow();
+		assertThat(reconciliationEvent.getAggregateType()).isEqualTo(OutboxAggregateType.RECONCILIATION);
+		assertThat(reconciliationEvent.getAggregateId()).isEqualTo("reconciliation");
+		assertThat(reconciliationEvent.getStatus()).isEqualTo(OutboxEventStatus.PENDING);
+	}
+
+	@Test
+	void publishesPendingOutboxEventsAndMarksThemAsPublished() throws Exception {
+		createWallet("outbox-worker-wallet");
+
+		OutboxEvent pendingEvent = this.outboxEventRepository.findAll().stream()
+			.filter(event -> event.getEventType() == OutboxEventType.WALLET_CREATED)
+			.findFirst()
+			.orElseThrow();
+		assertThat(pendingEvent.getStatus()).isEqualTo(OutboxEventStatus.PENDING);
+		assertThat(pendingEvent.getPublishedAt()).isNull();
+
+		this.outboxEventWorker.publishPendingEvents();
+
+		OutboxEvent publishedEvent = this.outboxEventRepository.findById(pendingEvent.getId()).orElseThrow();
+		assertThat(publishedEvent.getStatus()).isEqualTo(OutboxEventStatus.PUBLISHED);
+		assertThat(publishedEvent.getPublishedAt()).isNotNull();
+		assertThat(publishedEvent.getAttemptCount()).isZero();
+		assertThat(publishedEvent.getLastError()).isNull();
 	}
 
 	private Callable<TransferAttemptResult> concurrentTransfer(

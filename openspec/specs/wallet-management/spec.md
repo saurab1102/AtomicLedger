@@ -1,8 +1,6 @@
 ## Purpose
 Describe wallet creation rules and the preconditions for wallet-based operations.
-
 ## Requirements
-
 ### Requirement: Create wallet through API
 The system SHALL provide `POST /api/v1/wallets` to create a wallet from a JSON request containing `ownerReference` and `currency`.
 
@@ -67,3 +65,11 @@ The system SHALL record an audit log when a wallet is created successfully.
 #### Scenario: Wallet creation is audited
 - **WHEN** a wallet creation request succeeds
 - **THEN** the system stores an audit log describing the wallet creation action for the created wallet
+
+### Requirement: Create an outbox event for wallet creation
+The system SHALL persist an outbox event when a wallet is created successfully.
+
+#### Scenario: Wallet creation writes an outbox event
+- **WHEN** a wallet creation request succeeds
+- **THEN** the system stores a `PENDING` outbox event for the created wallet in the same transaction as the wallet record
+
