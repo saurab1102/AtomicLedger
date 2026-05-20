@@ -1,6 +1,7 @@
 package com.saurab.atomicledger.wallet;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.UUID;
 
 import jakarta.persistence.Column;
@@ -52,6 +53,9 @@ public class WalletTransaction {
 	@Column(name = "counterparty_resulting_available_balance", precision = 19, scale = 2)
 	private BigDecimal counterpartyResultingAvailableBalance;
 
+	@Column(name = "created_at", nullable = false)
+	private Instant createdAt;
+
 	protected WalletTransaction() {
 	}
 
@@ -65,7 +69,8 @@ public class WalletTransaction {
 		BigDecimal amount,
 		WalletCurrency currency,
 		BigDecimal resultingAvailableBalance,
-		BigDecimal counterpartyResultingAvailableBalance
+		BigDecimal counterpartyResultingAvailableBalance,
+		Instant createdAt
 	) {
 		this.id = id;
 		this.wallet = wallet;
@@ -77,6 +82,7 @@ public class WalletTransaction {
 		this.currency = currency;
 		this.resultingAvailableBalance = resultingAvailableBalance;
 		this.counterpartyResultingAvailableBalance = counterpartyResultingAvailableBalance;
+		this.createdAt = createdAt;
 	}
 
 	public UUID getId() {
@@ -117,5 +123,9 @@ public class WalletTransaction {
 
 	public BigDecimal getCounterpartyResultingAvailableBalance() {
 		return this.counterpartyResultingAvailableBalance;
+	}
+
+	public Instant getCreatedAt() {
+		return this.createdAt;
 	}
 }

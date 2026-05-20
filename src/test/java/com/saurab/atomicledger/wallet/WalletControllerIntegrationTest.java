@@ -583,6 +583,80 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 	}
 
 	@Test
+	void returnsDepositInWalletHistoryAsCredit() throws Exception {
+		UUID walletId = createWallet("history-deposit-wallet");
+		UUID depositTransactionId = depositAndReturnTransactionId(walletId, "history-deposit-001", "125.00");
+
+		this.mockMvc.perform(get("/api/v1/wallets/{walletId}/transactions", walletId))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.page").value(0))
+			.andExpect(jsonPath("$.size").value(20))
+			.andExpect(jsonPath("$.totalElements").value(1))
+			.andExpect(jsonPath("$.content[0].transactionId").value(depositTransactionId.toString()))
+			.andExpect(jsonPath("$.content[0].type").value("DEPOSIT"))
+			.andExpect(jsonPath("$.content[0].status").value("SUCCEEDED"))
+			.andExpect(jsonPath("$.content[0].direction").value("CREDIT"))
+			.andExpect(jsonPath("$.content[0].amount").value(125.0))
+			.andExpect(jsonPath("$.content[0].currency").value("INR"))
+			.andExpect(jsonPath("$.content[0].counterpartyWalletId").doesNotExist())
+			.andExpect(jsonPath("$.content[0].createdAt").isNotEmpty());
+	}
+
+	@Test
+	void returnsOutgoingTransferAsDebitAndIncomingTransferAsCredit() throws Exception {
+		UUID sourceWalletId = createWallet("history-source-wallet");
+		UUID destinationWalletId = createWallet("history-destination-wallet");
+		deposit(sourceWalletId, "history-seed-source", "200.00");
+		UUID transferTransactionId = transfer("history-transfer-001", sourceWalletId, destinationWalletId, "80.00");
+
+		this.mockMvc.perform(get("/api/v1/wallets/{walletId}/transactions", sourceWalletId))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.content[0].transactionId").value(transferTransactionId.toString()))
+			.andExpect(jsonPath("$.content[0].type").value("TRANSFER"))
+			.andExpect(jsonPath("$.content[0].direction").value("DEBIT"))
+			.andExpect(jsonPath("$.content[0].counterpartyWalletId").value(destinationWalletId.toString()))
+			.andExpect(jsonPath("$.content[0].createdAt").isNotEmpty());
+
+		this.mockMvc.perform(get("/api/v1/wallets/{walletId}/transactions", destinationWalletId))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.content[0].transactionId").value(transferTransactionId.toString()))
+			.andExpect(jsonPath("$.content[0].type").value("TRANSFER"))
+			.andExpect(jsonPath("$.content[0].direction").value("CREDIT"))
+			.andExpect(jsonPath("$.content[0].counterpartyWalletId").value(sourceWalletId.toString()))
+			.andExpect(jsonPath("$.content[0].createdAt").isNotEmpty());
+	}
+
+	@Test
+	void paginatesWalletTransactionHistory() throws Exception {
+		UUID walletId = createWallet("history-pagination-wallet");
+		deposit(walletId, "history-page-001", "10.00");
+		deposit(walletId, "history-page-002", "20.00");
+		deposit(walletId, "history-page-003", "30.00");
+
+		this.mockMvc.perform(get("/api/v1/wallets/{walletId}/transactions", walletId)
+			.param("page", "1")
+			.param("size", "2")
+			.param("sort", "amount,asc"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.page").value(1))
+			.andExpect(jsonPath("$.size").value(2))
+			.andExpect(jsonPath("$.totalElements").value(3))
+			.andExpect(jsonPath("$.totalPages").value(2))
+			.andExpect(jsonPath("$.content.length()").value(1))
+			.andExpect(jsonPath("$.content[0].amount").value(30.0))
+			.andExpect(jsonPath("$.content[0].direction").value("CREDIT"));
+	}
+
+	@Test
+	void returnsNotFoundForMissingWalletTransactionHistory() throws Exception {
+		this.mockMvc.perform(get("/api/v1/wallets/{walletId}/transactions", UUID.randomUUID()))
+			.andExpect(status().isNotFound())
+			.andExpect(jsonPath("$.message").value("Validation failed"))
+			.andExpect(jsonPath("$.errors[0].field").value("walletId"))
+			.andExpect(jsonPath("$.errors[0].message").value("wallet not found"));
+	}
+
+	@Test
 	void passesReconciliationForHealthyAccountingData() throws Exception {
 		UUID sourceWalletId = createWallet("recon-source-001");
 		UUID destinationWalletId = createWallet("recon-destination-001");
@@ -946,6 +1020,22 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 				}
 				""".formatted(amount)))
 			.andExpect(status().isCreated());
+	}
+
+	private UUID depositAndReturnTransactionId(UUID walletId, String idempotencyKey, String amount) throws Exception {
+		MvcResult result = this.mockMvc.perform(post("/api/v1/wallets/{walletId}/deposit", walletId)
+			.contentType(MediaType.APPLICATION_JSON)
+			.header("Idempotency-Key", idempotencyKey)
+			.content("""
+				{
+				  "amount": %s,
+				  "currency": "INR"
+				}
+				""".formatted(amount)))
+			.andExpect(status().isCreated())
+			.andReturn();
+
+		return UUID.fromString(JsonPath.read(result.getResponse().getContentAsString(), "$.transactionId"));
 	}
 
 	private UUID createWallet(String ownerReference) throws Exception {

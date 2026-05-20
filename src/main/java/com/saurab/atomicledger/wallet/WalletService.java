@@ -2,6 +2,7 @@ package com.saurab.atomicledger.wallet;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -9,6 +10,9 @@ import java.util.UUID;
 import java.util.stream.Collectors;
 
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
@@ -19,6 +23,8 @@ import com.saurab.atomicledger.wallet.api.CreateTransferRequest;
 import com.saurab.atomicledger.wallet.api.DepositResponse;
 import com.saurab.atomicledger.wallet.api.DepositWalletRequest;
 import com.saurab.atomicledger.wallet.api.TransferResponse;
+import com.saurab.atomicledger.wallet.api.WalletTransactionHistoryItemResponse;
+import com.saurab.atomicledger.wallet.api.WalletTransactionHistoryPageResponse;
 import com.saurab.atomicledger.wallet.api.WalletResponse;
 
 @Service
@@ -136,7 +142,8 @@ public class WalletService {
 			amount,
 			currency,
 			resultingAvailableBalance,
-			null
+			null,
+			Instant.now()
 		));
 
 		this.ledgerEntryRepository.save(new LedgerEntry(
@@ -273,7 +280,8 @@ public class WalletService {
 			amount,
 			currency,
 			sourceAvailableBalance,
-			destinationAvailableBalance
+			destinationAvailableBalance,
+			Instant.now()
 		));
 
 		this.ledgerEntryRepository.save(new LedgerEntry(
@@ -330,6 +338,24 @@ public class WalletService {
 		return this.walletRepository.findAllByIdInOrderByIdForUpdate(walletIdsInLockOrder);
 	}
 
+	@Transactional(readOnly = true)
+	public WalletTransactionHistoryPageResponse getTransactionHistory(UUID walletId, int page, int size, String sort) {
+		if (!this.walletRepository.existsById(walletId)) {
+			throw new WalletNotFoundException(walletId);
+		}
+
+		PageRequest pageRequest = PageRequest.of(page, size, toHistorySort(sort));
+		Page<LedgerEntry> historyPage = this.ledgerEntryRepository.findAllByWalletId(walletId, pageRequest);
+
+		return new WalletTransactionHistoryPageResponse(
+			historyPage.getContent().stream().map(this::toHistoryItem).toList(),
+			historyPage.getNumber(),
+			historyPage.getSize(),
+			historyPage.getTotalElements(),
+			historyPage.getTotalPages()
+		);
+	}
+
 	private DepositResponse toDepositResponse(WalletTransaction transaction) {
 		return new DepositResponse(
 			transaction.getId(),
@@ -357,6 +383,45 @@ public class WalletService {
 			transaction.getResultingAvailableBalance(),
 			transaction.getCounterpartyResultingAvailableBalance()
 		);
+	}
+
+	private WalletTransactionHistoryItemResponse toHistoryItem(LedgerEntry ledgerEntry) {
+		WalletTransaction transaction = ledgerEntry.getTransaction();
+		UUID counterpartyWalletId = transaction.getTransactionType() == WalletTransactionType.DEPOSIT
+			? null
+			: ledgerEntry.getWallet().getId().equals(transaction.getWallet().getId())
+				? transaction.getCounterpartyWallet().getId()
+				: transaction.getWallet().getId();
+
+		return new WalletTransactionHistoryItemResponse(
+			transaction.getId(),
+			transaction.getTransactionType().name(),
+			transaction.getStatus().name(),
+			ledgerEntry.getEntryType().name(),
+			transaction.getAmount(),
+			transaction.getCurrency().name(),
+			counterpartyWalletId,
+			transaction.getCreatedAt()
+		);
+	}
+
+	private Sort toHistorySort(String sort) {
+		String normalizedSort = sort == null || sort.isBlank() ? "createdAt,desc" : sort.trim();
+		String[] parts = normalizedSort.split(",", 2);
+		String field = parts[0].trim();
+		String direction = parts.length > 1 ? parts[1].trim() : "desc";
+
+		String property = switch (field) {
+			case "amount" -> "transaction.amount";
+			case "currency" -> "transaction.currency";
+			case "status" -> "transaction.status";
+			case "type" -> "transaction.transactionType";
+			case "createdAt" -> "transaction.createdAt";
+			default -> "transaction.createdAt";
+		};
+
+		Sort.Direction sortDirection = "asc".equalsIgnoreCase(direction) ? Sort.Direction.ASC : Sort.Direction.DESC;
+		return Sort.by(new Sort.Order(sortDirection, property), new Sort.Order(Sort.Direction.DESC, "transaction.id"));
 	}
 
 	private String normalizeIdempotencyKey(String idempotencyKey) {

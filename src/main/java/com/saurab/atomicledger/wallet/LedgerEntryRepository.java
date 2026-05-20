@@ -4,12 +4,16 @@ import java.math.BigDecimal;
 import java.util.List;
 import java.util.UUID;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 
 public interface LedgerEntryRepository extends JpaRepository<LedgerEntry, UUID> {
 
 	List<LedgerEntry> findAllByTransactionId(UUID transactionId);
+
+	Page<LedgerEntry> findAllByWalletId(UUID walletId, Pageable pageable);
 
 	@Query("""
 		select le.wallet.id as walletId,
