@@ -89,6 +89,7 @@ public class WalletService {
 		Optional<WalletTransaction> existingTransaction = this.walletTransactionRepository.findByIdempotencyKey(normalizedIdempotencyKey);
 
 		if (existingTransaction.isPresent()) {
+			// Duplicate replays do not create new state changes; they only surface the original result.
 			recordDuplicateDepositAudit(existingTransaction.get());
 			return toDepositResponse(existingTransaction.get());
 		}
@@ -177,6 +178,7 @@ public class WalletService {
 		Optional<WalletTransaction> existingTransaction = this.walletTransactionRepository.findByIdempotencyKey(normalizedIdempotencyKey);
 
 		if (existingTransaction.isPresent()) {
+			// A reused idempotency key must return the first committed transfer response.
 			recordDuplicateTransferAudit(existingTransaction.get());
 			return toTransferResponse(existingTransaction.get());
 		}
@@ -192,6 +194,7 @@ public class WalletService {
 				throw new IllegalStateException("transfer transaction returned no result");
 			}
 			if (transferAttemptResult.failed()) {
+				// The failure audit/outbox records were already committed inside the transaction.
 				throw new InsufficientAvailableBalanceException();
 			}
 			return transferAttemptResult.response();
@@ -240,6 +243,8 @@ public class WalletService {
 			throw new WalletCurrencyMismatchException();
 		}
 		if (sourceWallet.getAvailableBalance().compareTo(amount) < 0) {
+			// We persist the failed business outcome before surfacing the validation error so the
+			// outbox event is committed rather than rolled back with the exception.
 			recordInsufficientTransferAudit(sourceWallet.getId(), destinationWallet.getId(), amount, currency);
 			this.outboxEventService.recordInCurrentTransaction(
 				OutboxEventType.TRANSFER_INSUFFICIENT_BALANCE,
@@ -317,6 +322,7 @@ public class WalletService {
 	}
 
 	private List<Wallet> loadWalletsForTransfer(UUID sourceWalletId, UUID destinationWalletId) {
+		// Lock wallets in a stable order to reduce deadlock risk when transfers race each other.
 		List<UUID> walletIdsInLockOrder = java.util.stream.Stream.of(sourceWalletId, destinationWalletId)
 			.sorted()
 			.toList();

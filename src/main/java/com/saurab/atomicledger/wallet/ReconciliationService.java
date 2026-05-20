@@ -72,6 +72,7 @@ public class ReconciliationService {
 	}
 
 	private void reconcileWalletBalances(List<ReconciliationFailedCheckResponse> failedChecks) {
+		// Wallet balances are cached state; reconciliation proves they still match the ledger truth.
 		Map<UUID, BigDecimal> derivedBalancesByWalletId = this.ledgerEntryRepository.summarizeDerivedBalancesByWallet().stream()
 			.collect(Collectors.toMap(
 				LedgerEntryRepository.WalletLedgerBalanceSummary::getWalletId,
@@ -92,6 +93,7 @@ public class ReconciliationService {
 	}
 
 	private void reconcileTransfers(List<ReconciliationFailedCheckResponse> failedChecks) {
+		// A successful transfer must remain a balanced double-entry movement: one debit and one credit.
 		for (WalletTransaction transaction : this.walletTransactionRepository.findAllByStatusAndTransactionType(
 			WalletTransactionStatus.SUCCEEDED,
 			WalletTransactionType.TRANSFER
@@ -124,6 +126,7 @@ public class ReconciliationService {
 	}
 
 	private void reconcileDeposits(List<ReconciliationFailedCheckResponse> failedChecks) {
+		// Successful deposits are expected to create exactly one credit entry for the target wallet.
 		for (WalletTransaction transaction : this.walletTransactionRepository.findAllByStatusAndTransactionType(
 			WalletTransactionStatus.SUCCEEDED,
 			WalletTransactionType.DEPOSIT

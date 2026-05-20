@@ -17,6 +17,10 @@ public class OutboxEventService {
 		this.outboxEventRepository = outboxEventRepository;
 	}
 
+	/**
+	 * Persists an outbox event in the caller's active transaction so the event
+	 * commits atomically with the domain state change that produced it.
+	 */
 	@Transactional
 	public OutboxEvent recordInCurrentTransaction(
 		OutboxEventType eventType,

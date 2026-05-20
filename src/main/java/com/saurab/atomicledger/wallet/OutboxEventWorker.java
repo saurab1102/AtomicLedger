@@ -18,6 +18,10 @@ public class OutboxEventWorker {
 		this.outboxEventPublisher = outboxEventPublisher;
 	}
 
+	/**
+	 * Polls retryable outbox rows and advances them to PUBLISHED only after the
+	 * publish step succeeds. Failed attempts remain PENDING so later polls can retry.
+	 */
 	@Scheduled(fixedDelayString = "${atomicledger.outbox.scheduler.fixed-delay:5000}")
 	@Transactional
 	public void publishPendingEvents() {
