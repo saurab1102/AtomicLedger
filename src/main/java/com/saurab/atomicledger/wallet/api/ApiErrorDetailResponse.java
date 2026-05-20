@@ -1,6 +1,6 @@
 package com.saurab.atomicledger.wallet.api;
 
-public record FieldErrorResponse(
+public record ApiErrorDetailResponse(
 	String field,
 	String message
 ) {

@@ -101,9 +101,11 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 				}
 				"""))
 			.andExpect(status().isBadRequest())
+			.andExpect(jsonPath("$.errorCode").value("VALIDATION_ERROR"))
 			.andExpect(jsonPath("$.message").value("Validation failed"))
-			.andExpect(jsonPath("$.errors[0].field").value("ownerReference"))
-			.andExpect(jsonPath("$.errors[0].message").value("ownerReference is required"));
+			.andExpect(jsonPath("$.details[0].field").value("ownerReference"))
+			.andExpect(jsonPath("$.details[0].message").value("ownerReference is required"))
+			.andExpect(jsonPath("$.timestamp").isNotEmpty());
 	}
 
 	@Test
@@ -117,9 +119,11 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 				}
 				"""))
 			.andExpect(status().isBadRequest())
-			.andExpect(jsonPath("$.message").value("Validation failed"))
-			.andExpect(jsonPath("$.errors[0].field").value("currency"))
-			.andExpect(jsonPath("$.errors[0].message").value("currency is unsupported"));
+			.andExpect(jsonPath("$.errorCode").value("UNSUPPORTED_CURRENCY"))
+			.andExpect(jsonPath("$.message").value("currency is unsupported"))
+			.andExpect(jsonPath("$.details[0].field").value("currency"))
+			.andExpect(jsonPath("$.details[0].message").value("currency is unsupported"))
+			.andExpect(jsonPath("$.timestamp").isNotEmpty());
 	}
 
 	@Test
@@ -198,9 +202,11 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 				}
 				"""))
 			.andExpect(status().isBadRequest())
-			.andExpect(jsonPath("$.message").value("Validation failed"))
-			.andExpect(jsonPath("$.errors[0].field").value("Idempotency-Key"))
-			.andExpect(jsonPath("$.errors[0].message").value("Idempotency-Key header is required"));
+			.andExpect(jsonPath("$.errorCode").value("MISSING_IDEMPOTENCY_KEY"))
+			.andExpect(jsonPath("$.message").value("Idempotency-Key header is required"))
+			.andExpect(jsonPath("$.details[0].field").value("Idempotency-Key"))
+			.andExpect(jsonPath("$.details[0].message").value("Idempotency-Key header is required"))
+			.andExpect(jsonPath("$.timestamp").isNotEmpty());
 	}
 
 	@Test
@@ -217,9 +223,11 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 				}
 				"""))
 			.andExpect(status().isBadRequest())
+			.andExpect(jsonPath("$.errorCode").value("VALIDATION_ERROR"))
 			.andExpect(jsonPath("$.message").value("Validation failed"))
-			.andExpect(jsonPath("$.errors[0].field").value("amount"))
-			.andExpect(jsonPath("$.errors[0].message").value("amount must be positive"));
+			.andExpect(jsonPath("$.details[0].field").value("amount"))
+			.andExpect(jsonPath("$.details[0].message").value("amount must be positive"))
+			.andExpect(jsonPath("$.timestamp").isNotEmpty());
 	}
 
 	@Test
@@ -236,9 +244,11 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 				}
 				"""))
 			.andExpect(status().isBadRequest())
-			.andExpect(jsonPath("$.message").value("Validation failed"))
-			.andExpect(jsonPath("$.errors[0].field").value("currency"))
-			.andExpect(jsonPath("$.errors[0].message").value("currency is unsupported"));
+			.andExpect(jsonPath("$.errorCode").value("UNSUPPORTED_CURRENCY"))
+			.andExpect(jsonPath("$.message").value("currency is unsupported"))
+			.andExpect(jsonPath("$.details[0].field").value("currency"))
+			.andExpect(jsonPath("$.details[0].message").value("currency is unsupported"))
+			.andExpect(jsonPath("$.timestamp").isNotEmpty());
 	}
 
 	@Test
@@ -253,9 +263,11 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 				}
 				"""))
 			.andExpect(status().isNotFound())
-			.andExpect(jsonPath("$.message").value("Validation failed"))
-			.andExpect(jsonPath("$.errors[0].field").value("walletId"))
-			.andExpect(jsonPath("$.errors[0].message").value("wallet not found"));
+			.andExpect(jsonPath("$.errorCode").value("WALLET_NOT_FOUND"))
+			.andExpect(jsonPath("$.message").value("wallet not found"))
+			.andExpect(jsonPath("$.details[0].field").value("walletId"))
+			.andExpect(jsonPath("$.details[0].message").value("wallet not found"))
+			.andExpect(jsonPath("$.timestamp").isNotEmpty());
 	}
 
 	@Test
@@ -366,10 +378,12 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 				  "currency": "INR"
 				}
 				""".formatted(sourceWalletId, destinationWalletId)))
-			.andExpect(status().isBadRequest())
-			.andExpect(jsonPath("$.message").value("Validation failed"))
-			.andExpect(jsonPath("$.errors[0].field").value("amount"))
-			.andExpect(jsonPath("$.errors[0].message").value("insufficient available balance"));
+			.andExpect(status().isConflict())
+			.andExpect(jsonPath("$.errorCode").value("INSUFFICIENT_BALANCE"))
+			.andExpect(jsonPath("$.message").value("insufficient available balance"))
+			.andExpect(jsonPath("$.details[0].field").value("amount"))
+			.andExpect(jsonPath("$.details[0].message").value("insufficient available balance"))
+			.andExpect(jsonPath("$.timestamp").isNotEmpty());
 	}
 
 	@Test
@@ -389,9 +403,11 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 				}
 				""".formatted(walletId, walletId)))
 			.andExpect(status().isBadRequest())
-			.andExpect(jsonPath("$.message").value("Validation failed"))
-			.andExpect(jsonPath("$.errors[0].field").value("destinationWalletId"))
-			.andExpect(jsonPath("$.errors[0].message").value("source and destination wallets must be different"));
+			.andExpect(jsonPath("$.errorCode").value("INVALID_TRANSFER_TARGET"))
+			.andExpect(jsonPath("$.message").value("source and destination wallets must be different"))
+			.andExpect(jsonPath("$.details[0].field").value("destinationWalletId"))
+			.andExpect(jsonPath("$.details[0].message").value("source and destination wallets must be different"))
+			.andExpect(jsonPath("$.timestamp").isNotEmpty());
 	}
 
 	@Test
@@ -411,9 +427,11 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 				}
 				""".formatted(sourceWalletId, destinationWalletId)))
 			.andExpect(status().isBadRequest())
-			.andExpect(jsonPath("$.message").value("Validation failed"))
-			.andExpect(jsonPath("$.errors[0].field").value("Idempotency-Key"))
-			.andExpect(jsonPath("$.errors[0].message").value("Idempotency-Key header is required"));
+			.andExpect(jsonPath("$.errorCode").value("MISSING_IDEMPOTENCY_KEY"))
+			.andExpect(jsonPath("$.message").value("Idempotency-Key header is required"))
+			.andExpect(jsonPath("$.details[0].field").value("Idempotency-Key"))
+			.andExpect(jsonPath("$.details[0].message").value("Idempotency-Key header is required"))
+			.andExpect(jsonPath("$.timestamp").isNotEmpty());
 	}
 
 	@Test
@@ -434,9 +452,11 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 				}
 				""".formatted(sourceWalletId, destinationWalletId)))
 			.andExpect(status().isBadRequest())
-			.andExpect(jsonPath("$.message").value("Validation failed"))
-			.andExpect(jsonPath("$.errors[0].field").value("currency"))
-			.andExpect(jsonPath("$.errors[0].message").value("currency is unsupported"));
+			.andExpect(jsonPath("$.errorCode").value("UNSUPPORTED_CURRENCY"))
+			.andExpect(jsonPath("$.message").value("currency is unsupported"))
+			.andExpect(jsonPath("$.details[0].field").value("currency"))
+			.andExpect(jsonPath("$.details[0].message").value("currency is unsupported"))
+			.andExpect(jsonPath("$.timestamp").isNotEmpty());
 	}
 
 	@Test
@@ -456,9 +476,11 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 				}
 				""".formatted(sourceWalletId, UUID.randomUUID())))
 			.andExpect(status().isNotFound())
-			.andExpect(jsonPath("$.message").value("Validation failed"))
-			.andExpect(jsonPath("$.errors[0].field").value("destinationWalletId"))
-			.andExpect(jsonPath("$.errors[0].message").value("wallet not found"));
+			.andExpect(jsonPath("$.errorCode").value("WALLET_NOT_FOUND"))
+			.andExpect(jsonPath("$.message").value("wallet not found"))
+			.andExpect(jsonPath("$.details[0].field").value("destinationWalletId"))
+			.andExpect(jsonPath("$.details[0].message").value("wallet not found"))
+			.andExpect(jsonPath("$.timestamp").isNotEmpty());
 	}
 
 	@Test
@@ -545,17 +567,18 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 
 			List<TransferAttemptResult> results = List.of(firstFuture.get(), secondFuture.get());
 			long successCount = results.stream().filter(result -> result.statusCode() == 201).count();
-			long failureCount = results.stream().filter(result -> result.statusCode() == 400).count();
+			long failureCount = results.stream().filter(result -> result.statusCode() == 409).count();
 
 			assertThat(successCount).isEqualTo(1);
 			assertThat(failureCount).isEqualTo(1);
 
 			TransferAttemptResult failedTransfer = results.stream()
-				.filter(result -> result.statusCode() == 400)
+				.filter(result -> result.statusCode() == 409)
 				.findFirst()
 				.orElseThrow();
-			assertThat(JsonPath.<String>read(failedTransfer.responseBody(), "$.errors[0].field")).isEqualTo("amount");
-			assertThat(JsonPath.<String>read(failedTransfer.responseBody(), "$.errors[0].message")).isEqualTo("insufficient available balance");
+			assertThat(JsonPath.<String>read(failedTransfer.responseBody(), "$.errorCode")).isEqualTo("INSUFFICIENT_BALANCE");
+			assertThat(JsonPath.<String>read(failedTransfer.responseBody(), "$.details[0].field")).isEqualTo("amount");
+			assertThat(JsonPath.<String>read(failedTransfer.responseBody(), "$.details[0].message")).isEqualTo("insufficient available balance");
 
 			Wallet sourceWallet = this.walletRepository.findById(sourceWalletId).orElseThrow();
 			assertThat(sourceWallet.getAvailableBalance()).isIn(
@@ -651,9 +674,11 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 	void returnsNotFoundForMissingWalletTransactionHistory() throws Exception {
 		this.mockMvc.perform(get("/api/v1/wallets/{walletId}/transactions", UUID.randomUUID()))
 			.andExpect(status().isNotFound())
-			.andExpect(jsonPath("$.message").value("Validation failed"))
-			.andExpect(jsonPath("$.errors[0].field").value("walletId"))
-			.andExpect(jsonPath("$.errors[0].message").value("wallet not found"));
+			.andExpect(jsonPath("$.errorCode").value("WALLET_NOT_FOUND"))
+			.andExpect(jsonPath("$.message").value("wallet not found"))
+			.andExpect(jsonPath("$.details[0].field").value("walletId"))
+			.andExpect(jsonPath("$.details[0].message").value("wallet not found"))
+			.andExpect(jsonPath("$.timestamp").isNotEmpty());
 	}
 
 	@Test
@@ -851,7 +876,7 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 				  "currency": "INR"
 				}
 				""".formatted(failedSourceWalletId, failedDestinationWalletId)))
-			.andExpect(status().isBadRequest());
+			.andExpect(status().isConflict());
 
 		assertThat(this.auditLogRepository.findAll().stream().map(AuditLog::getAction))
 			.contains(
@@ -877,7 +902,7 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 				  "currency": "INR"
 				}
 				""".formatted(sourceWalletId, destinationWalletId)))
-			.andExpect(status().isBadRequest());
+			.andExpect(status().isConflict());
 
 		OutboxEvent failureEvent = this.outboxEventRepository.findAll().stream()
 			.filter(event -> event.getEventType() == OutboxEventType.TRANSFER_INSUFFICIENT_BALANCE)

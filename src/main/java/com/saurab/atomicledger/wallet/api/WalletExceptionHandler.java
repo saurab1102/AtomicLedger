@@ -1,5 +1,6 @@
 package com.saurab.atomicledger.wallet.api;
 
+import java.time.Instant;
 import java.util.Comparator;
 import java.util.List;
 
@@ -22,76 +23,97 @@ import com.saurab.atomicledger.wallet.WalletNotFoundException;
 public class WalletExceptionHandler {
 
 	@ExceptionHandler(MethodArgumentNotValidException.class)
-	public ResponseEntity<ValidationErrorResponse> handleMethodArgumentNotValid(MethodArgumentNotValidException exception) {
-		List<FieldErrorResponse> errors = exception.getBindingResult()
+	public ResponseEntity<ApiErrorResponse> handleMethodArgumentNotValid(MethodArgumentNotValidException exception) {
+		List<ApiErrorDetailResponse> details = exception.getBindingResult()
 			.getFieldErrors()
 			.stream()
 			.sorted(Comparator.comparing(FieldError::getField))
-			.map(fieldError -> new FieldErrorResponse(fieldError.getField(), fieldError.getDefaultMessage()))
+			.map(fieldError -> new ApiErrorDetailResponse(fieldError.getField(), fieldError.getDefaultMessage()))
 			.toList();
-		return ResponseEntity.badRequest().body(new ValidationErrorResponse("Validation failed", errors));
+		return response(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", "Validation failed", details);
 	}
 
 	@ExceptionHandler(UnsupportedWalletCurrencyException.class)
-	public ResponseEntity<ValidationErrorResponse> handleUnsupportedWalletCurrency(UnsupportedWalletCurrencyException exception) {
-		ValidationErrorResponse response = new ValidationErrorResponse(
-			"Validation failed",
-			List.of(new FieldErrorResponse("currency", exception.getMessage()))
+	public ResponseEntity<ApiErrorResponse> handleUnsupportedWalletCurrency(UnsupportedWalletCurrencyException exception) {
+		return response(
+			HttpStatus.BAD_REQUEST,
+			"UNSUPPORTED_CURRENCY",
+			exception.getMessage(),
+			List.of(new ApiErrorDetailResponse("currency", exception.getMessage()))
 		);
-		return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(response);
 	}
 
 	@ExceptionHandler(MissingIdempotencyKeyException.class)
-	public ResponseEntity<ValidationErrorResponse> handleMissingIdempotencyKey(MissingIdempotencyKeyException exception) {
-		ValidationErrorResponse response = new ValidationErrorResponse(
-			"Validation failed",
-			List.of(new FieldErrorResponse("Idempotency-Key", exception.getMessage()))
+	public ResponseEntity<ApiErrorResponse> handleMissingIdempotencyKey(MissingIdempotencyKeyException exception) {
+		return response(
+			HttpStatus.BAD_REQUEST,
+			"MISSING_IDEMPOTENCY_KEY",
+			exception.getMessage(),
+			List.of(new ApiErrorDetailResponse("Idempotency-Key", exception.getMessage()))
 		);
-		return ResponseEntity.badRequest().body(response);
 	}
 
 	@ExceptionHandler(WalletNotFoundException.class)
-	public ResponseEntity<ValidationErrorResponse> handleWalletNotFound(WalletNotFoundException exception) {
-		ValidationErrorResponse response = new ValidationErrorResponse(
-			"Validation failed",
-			List.of(new FieldErrorResponse(exception.getField(), exception.getMessage()))
+	public ResponseEntity<ApiErrorResponse> handleWalletNotFound(WalletNotFoundException exception) {
+		return response(
+			HttpStatus.NOT_FOUND,
+			"WALLET_NOT_FOUND",
+			exception.getMessage(),
+			List.of(new ApiErrorDetailResponse(exception.getField(), exception.getMessage()))
 		);
-		return ResponseEntity.status(HttpStatus.NOT_FOUND).body(response);
 	}
 
 	@ExceptionHandler(WalletNotActiveException.class)
-	public ResponseEntity<ValidationErrorResponse> handleWalletNotActive(WalletNotActiveException exception) {
-		ValidationErrorResponse response = new ValidationErrorResponse(
-			"Validation failed",
-			List.of(new FieldErrorResponse(exception.getField(), exception.getMessage()))
+	public ResponseEntity<ApiErrorResponse> handleWalletNotActive(WalletNotActiveException exception) {
+		return response(
+			HttpStatus.BAD_REQUEST,
+			"WALLET_NOT_ACTIVE",
+			exception.getMessage(),
+			List.of(new ApiErrorDetailResponse(exception.getField(), exception.getMessage()))
 		);
-		return ResponseEntity.badRequest().body(response);
 	}
 
 	@ExceptionHandler(SameWalletTransferException.class)
-	public ResponseEntity<ValidationErrorResponse> handleSameWalletTransfer(SameWalletTransferException exception) {
-		ValidationErrorResponse response = new ValidationErrorResponse(
-			"Validation failed",
-			List.of(new FieldErrorResponse("destinationWalletId", exception.getMessage()))
+	public ResponseEntity<ApiErrorResponse> handleSameWalletTransfer(SameWalletTransferException exception) {
+		return response(
+			HttpStatus.BAD_REQUEST,
+			"INVALID_TRANSFER_TARGET",
+			exception.getMessage(),
+			List.of(new ApiErrorDetailResponse("destinationWalletId", exception.getMessage()))
 		);
-		return ResponseEntity.badRequest().body(response);
 	}
 
 	@ExceptionHandler(InsufficientAvailableBalanceException.class)
-	public ResponseEntity<ValidationErrorResponse> handleInsufficientAvailableBalance(InsufficientAvailableBalanceException exception) {
-		ValidationErrorResponse response = new ValidationErrorResponse(
-			"Validation failed",
-			List.of(new FieldErrorResponse("amount", exception.getMessage()))
+	public ResponseEntity<ApiErrorResponse> handleInsufficientAvailableBalance(InsufficientAvailableBalanceException exception) {
+		return response(
+			HttpStatus.CONFLICT,
+			"INSUFFICIENT_BALANCE",
+			exception.getMessage(),
+			List.of(new ApiErrorDetailResponse("amount", exception.getMessage()))
 		);
-		return ResponseEntity.badRequest().body(response);
 	}
 
 	@ExceptionHandler(WalletCurrencyMismatchException.class)
-	public ResponseEntity<ValidationErrorResponse> handleWalletCurrencyMismatch(WalletCurrencyMismatchException exception) {
-		ValidationErrorResponse response = new ValidationErrorResponse(
-			"Validation failed",
-			List.of(new FieldErrorResponse("currency", exception.getMessage()))
+	public ResponseEntity<ApiErrorResponse> handleWalletCurrencyMismatch(WalletCurrencyMismatchException exception) {
+		return response(
+			HttpStatus.BAD_REQUEST,
+			"CURRENCY_MISMATCH",
+			exception.getMessage(),
+			List.of(new ApiErrorDetailResponse("currency", exception.getMessage()))
 		);
-		return ResponseEntity.badRequest().body(response);
+	}
+
+	@ExceptionHandler(Exception.class)
+	public ResponseEntity<ApiErrorResponse> handleUnhandledException(Exception exception) {
+		return response(HttpStatus.INTERNAL_SERVER_ERROR, "INTERNAL_SERVER_ERROR", "Internal server error", List.of());
+	}
+
+	private ResponseEntity<ApiErrorResponse> response(
+		HttpStatus status,
+		String errorCode,
+		String message,
+		List<ApiErrorDetailResponse> details
+	) {
+		return ResponseEntity.status(status).body(new ApiErrorResponse(errorCode, message, details, Instant.now()));
 	}
 }
