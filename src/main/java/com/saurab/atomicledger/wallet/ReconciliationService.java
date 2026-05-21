@@ -8,6 +8,8 @@ import java.util.UUID;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -17,6 +19,7 @@ import com.saurab.atomicledger.wallet.api.ReconciliationResponse;
 @Service
 public class ReconciliationService {
 
+	private static final Logger LOGGER = LoggerFactory.getLogger(ReconciliationService.class);
 	private static final BigDecimal ZERO = BigDecimal.ZERO.setScale(2);
 
 	private final WalletRepository walletRepository;
@@ -24,19 +27,22 @@ public class ReconciliationService {
 	private final LedgerEntryRepository ledgerEntryRepository;
 	private final AuditLogService auditLogService;
 	private final OutboxEventService outboxEventService;
+	private final OperationalMetrics operationalMetrics;
 
 	public ReconciliationService(
 		WalletRepository walletRepository,
 		WalletTransactionRepository walletTransactionRepository,
 		LedgerEntryRepository ledgerEntryRepository,
 		AuditLogService auditLogService,
-		OutboxEventService outboxEventService
+		OutboxEventService outboxEventService,
+		OperationalMetrics operationalMetrics
 	) {
 		this.walletRepository = walletRepository;
 		this.walletTransactionRepository = walletTransactionRepository;
 		this.ledgerEntryRepository = ledgerEntryRepository;
 		this.auditLogService = auditLogService;
 		this.outboxEventService = outboxEventService;
+		this.operationalMetrics = operationalMetrics;
 	}
 
 	@Transactional
@@ -48,6 +54,7 @@ public class ReconciliationService {
 		reconcileDeposits(failedChecks);
 
 		ReconciliationStatus status = failedChecks.isEmpty() ? ReconciliationStatus.PASS : ReconciliationStatus.FAIL;
+		this.operationalMetrics.incrementReconciliationRuns();
 		this.auditLogService.recordInCurrentTransaction(
 			AuditAction.RECONCILIATION_RUN,
 			AuditEntityType.RECONCILIATION,
@@ -55,6 +62,7 @@ public class ReconciliationService {
 			Map.of("status", status.name(), "failedCheckCount", failedChecks.size())
 		);
 		if (status == ReconciliationStatus.FAIL) {
+			this.operationalMetrics.incrementReconciliationFailures();
 			this.auditLogService.recordInCurrentTransaction(
 				AuditAction.RECONCILIATION_FAILED,
 				AuditEntityType.RECONCILIATION,
@@ -68,7 +76,15 @@ public class ReconciliationService {
 				Map.of("status", status.name(), "failedCheckCount", failedChecks.size())
 			);
 		}
+		logReconciliationOutcome(status, failedChecks.size());
 		return new ReconciliationResponse(status.name(), failedChecks);
+	}
+
+	private void logReconciliationOutcome(ReconciliationStatus status, int failedCheckCount) {
+		LOGGER.atInfo()
+			.addKeyValue("reconciliationStatus", status.name())
+			.addKeyValue("failedCheckCount", failedCheckCount)
+			.log("reconciliation_completed");
 	}
 
 	private void reconcileWalletBalances(List<ReconciliationFailedCheckResponse> failedChecks) {

@@ -9,6 +9,8 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -17,6 +19,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
+
+import io.micrometer.core.instrument.Timer;
 
 import com.saurab.atomicledger.wallet.api.CreateWalletRequest;
 import com.saurab.atomicledger.wallet.api.CreateTransferRequest;
@@ -30,6 +34,7 @@ import com.saurab.atomicledger.wallet.api.WalletResponse;
 @Service
 public class WalletService {
 
+	private static final Logger LOGGER = LoggerFactory.getLogger(WalletService.class);
 	private static final BigDecimal INITIAL_AVAILABLE_BALANCE = BigDecimal.ZERO.setScale(2);
 
 	private final WalletRepository walletRepository;
@@ -37,6 +42,7 @@ public class WalletService {
 	private final LedgerEntryRepository ledgerEntryRepository;
 	private final AuditLogService auditLogService;
 	private final OutboxEventService outboxEventService;
+	private final OperationalMetrics operationalMetrics;
 	private final TransactionTemplate transactionTemplate;
 
 	public WalletService(
@@ -45,6 +51,7 @@ public class WalletService {
 		LedgerEntryRepository ledgerEntryRepository,
 		AuditLogService auditLogService,
 		OutboxEventService outboxEventService,
+		OperationalMetrics operationalMetrics,
 		PlatformTransactionManager transactionManager
 	) {
 		this.walletRepository = walletRepository;
@@ -52,6 +59,7 @@ public class WalletService {
 		this.ledgerEntryRepository = ledgerEntryRepository;
 		this.auditLogService = auditLogService;
 		this.outboxEventService = outboxEventService;
+		this.operationalMetrics = operationalMetrics;
 		this.transactionTemplate = new TransactionTemplate(transactionManager);
 	}
 
@@ -80,6 +88,7 @@ public class WalletService {
 			savedWallet.getId().toString(),
 			Map.of("ownerReference", savedWallet.getOwnerReference(), "currency", savedWallet.getCurrency().name())
 		);
+		this.operationalMetrics.incrementWalletsCreated();
 
 		return new WalletResponse(
 			savedWallet.getId(),
@@ -120,6 +129,7 @@ public class WalletService {
 		Optional<WalletTransaction> existingTransaction = this.walletTransactionRepository.findByIdempotencyKey(idempotencyKey);
 
 		if (existingTransaction.isPresent()) {
+			recordDuplicateDepositAudit(existingTransaction.get());
 			return toDepositResponse(existingTransaction.get());
 		}
 
@@ -176,24 +186,27 @@ public class WalletService {
 				"currency", currency.name()
 			)
 		);
+		this.operationalMetrics.incrementDepositsSucceeded();
+		logDepositOutcome("deposit_succeeded", wallet.getId(), transaction.getId(), idempotencyKey);
 
 		return toDepositResponse(transaction);
 	}
 
 	public TransferResponse transfer(String idempotencyKey, CreateTransferRequest request) {
 		String normalizedIdempotencyKey = normalizeIdempotencyKey(idempotencyKey);
+		Timer.Sample transferSample = this.operationalMetrics.startTransferProcessingSample();
 		Optional<WalletTransaction> existingTransaction = this.walletTransactionRepository.findByIdempotencyKey(normalizedIdempotencyKey);
 
-		if (existingTransaction.isPresent()) {
-			// A reused idempotency key must return the first committed transfer response.
-			recordDuplicateTransferAudit(existingTransaction.get());
-			return toTransferResponse(existingTransaction.get());
-		}
-
-		WalletCurrency currency = WalletCurrency.from(request.currency());
-		BigDecimal amount = request.amount().setScale(2, RoundingMode.HALF_UP);
-
 		try {
+			if (existingTransaction.isPresent()) {
+				// A reused idempotency key must return the first committed transfer response.
+				recordDuplicateTransferAudit(existingTransaction.get());
+				return toTransferResponse(existingTransaction.get());
+			}
+
+			WalletCurrency currency = WalletCurrency.from(request.currency());
+			BigDecimal amount = request.amount().setScale(2, RoundingMode.HALF_UP);
+
 			TransferAttemptResult transferAttemptResult = this.transactionTemplate.execute(
 				status -> createTransfer(normalizedIdempotencyKey, request, amount, currency)
 			);
@@ -202,8 +215,16 @@ public class WalletService {
 			}
 			if (transferAttemptResult.failed()) {
 				// The failure audit/outbox records were already committed inside the transaction.
+				this.operationalMetrics.incrementTransfersFailed();
+				logTransferFailed(normalizedIdempotencyKey, request.sourceWalletId(), request.destinationWalletId());
 				throw new InsufficientAvailableBalanceException();
 			}
+			if (transferAttemptResult.replayed()) {
+				recordDuplicateTransferAudit(this.walletTransactionRepository.findById(transferAttemptResult.response().transactionId()).orElseThrow());
+				return transferAttemptResult.response();
+			}
+			this.operationalMetrics.incrementTransfersSucceeded();
+			logTransferSucceeded(transferAttemptResult.response(), normalizedIdempotencyKey);
 			return transferAttemptResult.response();
 		}
 		catch (DataIntegrityViolationException exception) {
@@ -213,6 +234,9 @@ public class WalletService {
 					return toTransferResponse(transaction);
 				})
 				.orElseThrow(() -> exception);
+		}
+		finally {
+			this.operationalMetrics.recordTransferProcessingDuration(transferSample);
 		}
 	}
 
@@ -225,7 +249,7 @@ public class WalletService {
 		Optional<WalletTransaction> existingTransaction = this.walletTransactionRepository.findByIdempotencyKey(idempotencyKey);
 
 		if (existingTransaction.isPresent()) {
-			return TransferAttemptResult.success(toTransferResponse(existingTransaction.get()));
+			return TransferAttemptResult.replayed(toTransferResponse(existingTransaction.get()));
 		}
 
 		if (request.sourceWalletId().equals(request.destinationWalletId())) {
@@ -441,6 +465,13 @@ public class WalletService {
 				"idempotencyKey", transaction.getIdempotencyKey()
 			)
 		);
+		this.operationalMetrics.incrementDepositDuplicateReplays();
+		logDepositOutcome(
+			"deposit_duplicate_replay",
+			transaction.getWallet().getId(),
+			transaction.getId(),
+			transaction.getIdempotencyKey()
+		);
 	}
 
 	private void recordDuplicateTransferAudit(WalletTransaction transaction) {
@@ -454,6 +485,8 @@ public class WalletService {
 				"idempotencyKey", transaction.getIdempotencyKey()
 			)
 		);
+		this.operationalMetrics.incrementTransferDuplicateReplays();
+		logTransferReplay(transaction, transaction.getIdempotencyKey());
 	}
 
 	private void recordInsufficientTransferAudit(
@@ -475,14 +508,66 @@ public class WalletService {
 		);
 	}
 
-	private record TransferAttemptResult(TransferResponse response, boolean failed) {
+	private void logDepositOutcome(String eventName, UUID walletId, UUID transactionId, String idempotencyKey) {
+		LOGGER.atInfo()
+			.addKeyValue("walletId", walletId)
+			.addKeyValue("transactionId", transactionId)
+			.addKeyValue("idempotencyKey", idempotencyKey)
+			.log(eventName);
+	}
+
+	private void logTransferSucceeded(TransferResponse response, String idempotencyKey) {
+		LOGGER.atInfo()
+			.addKeyValue("transactionId", response.transactionId())
+			.addKeyValue("sourceWalletId", response.sourceWalletId())
+			.addKeyValue("destinationWalletId", response.destinationWalletId())
+			.addKeyValue("idempotencyKey", idempotencyKey)
+			.log("transfer_succeeded");
+	}
+
+	private void logTransferReplay(WalletTransaction transaction, String idempotencyKey) {
+		LOGGER.atInfo()
+			.addKeyValue("transactionId", transaction.getId())
+			.addKeyValue("sourceWalletId", transaction.getWallet().getId())
+			.addKeyValue("destinationWalletId", transaction.getCounterpartyWallet().getId())
+			.addKeyValue("idempotencyKey", idempotencyKey)
+			.log("transfer_duplicate_replay");
+	}
+
+	private void logTransferFailed(String idempotencyKey, UUID sourceWalletId, UUID destinationWalletId) {
+		LOGGER.atInfo()
+			.addKeyValue("sourceWalletId", sourceWalletId)
+			.addKeyValue("destinationWalletId", destinationWalletId)
+			.addKeyValue("idempotencyKey", idempotencyKey)
+			.log("transfer_failed");
+	}
+
+	private record TransferAttemptResult(TransferResponse response, TransferAttemptOutcome outcome) {
 
 		private static TransferAttemptResult success(TransferResponse response) {
-			return new TransferAttemptResult(response, false);
+			return new TransferAttemptResult(response, TransferAttemptOutcome.SUCCEEDED);
 		}
 
 		private static TransferAttemptResult failure() {
-			return new TransferAttemptResult(null, true);
+			return new TransferAttemptResult(null, TransferAttemptOutcome.FAILED);
 		}
+
+		private static TransferAttemptResult replayed(TransferResponse response) {
+			return new TransferAttemptResult(response, TransferAttemptOutcome.DUPLICATE_REPLAY);
+		}
+
+		private boolean failed() {
+			return this.outcome == TransferAttemptOutcome.FAILED;
+		}
+
+		private boolean replayed() {
+			return this.outcome == TransferAttemptOutcome.DUPLICATE_REPLAY;
+		}
+	}
+
+	private enum TransferAttemptOutcome {
+		SUCCEEDED,
+		FAILED,
+		DUPLICATE_REPLAY
 	}
 }

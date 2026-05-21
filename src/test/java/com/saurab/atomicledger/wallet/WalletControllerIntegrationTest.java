@@ -29,7 +29,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import com.saurab.atomicledger.PostgresIntegrationTest;
 
-@SpringBootTest(properties = "spring.task.scheduling.enabled=false")
+@SpringBootTest(properties = "atomicledger.scheduling.enabled=false")
 @AutoConfigureMockMvc
 class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 

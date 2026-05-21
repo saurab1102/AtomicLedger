@@ -11,13 +11,12 @@ public class LoggingOutboxEventPublisher implements OutboxEventPublisher {
 
 	@Override
 	public void publish(OutboxEvent event) {
-		LOGGER.info(
-			"Publishing outbox event id={} type={} aggregateType={} aggregateId={} payload={}",
-			event.getId(),
-			event.getEventType(),
-			event.getAggregateType(),
-			event.getAggregateId(),
-			event.getPayload()
-		);
+		LOGGER.atInfo()
+			.addKeyValue("outboxEventId", event.getId())
+			.addKeyValue("eventType", event.getEventType().name())
+			.addKeyValue("aggregateType", event.getAggregateType().name())
+			.addKeyValue("aggregateId", event.getAggregateId())
+			.addKeyValue("payload", event.getPayload())
+			.log("publishing_outbox_event");
 	}
 }
