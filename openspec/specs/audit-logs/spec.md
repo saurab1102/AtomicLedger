@@ -34,3 +34,10 @@ The system SHALL persist audit logs in the same database transaction as the corr
 #### Scenario: Successful transfer and audit log commit together
 - **WHEN** a transfer request succeeds
 - **THEN** the transfer state changes and its audit log are committed atomically
+
+### Requirement: Document audit-log inspection in OpenAPI
+The system SHALL document the audit-log inspection API in OpenAPI, including its optional query parameters and list response body.
+
+#### Scenario: Audit-log filters are documented
+- **WHEN** a developer inspects `GET /api/v1/audit-logs` in the OpenAPI docs
+- **THEN** the documentation describes the optional `entityType` and `entityId` query parameters and the audit-log response items

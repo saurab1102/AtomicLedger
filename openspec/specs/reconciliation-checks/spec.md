@@ -58,3 +58,9 @@ The system SHALL persist an outbox event when a reconciliation run returns statu
 - **WHEN** a reconciliation run returns status `FAIL`
 - **THEN** the system stores a `PENDING` outbox event for the failed reconciliation in the same transaction as the reconciliation result
 
+### Requirement: Document reconciliation execution in OpenAPI
+The system SHALL document the reconciliation API in OpenAPI, including the operation for triggering a run and the reconciliation response body.
+
+#### Scenario: Reconciliation endpoint is documented
+- **WHEN** a developer inspects `POST /api/v1/reconciliation/run` in the OpenAPI docs
+- **THEN** the documentation describes the reconciliation response contract returned by the endpoint

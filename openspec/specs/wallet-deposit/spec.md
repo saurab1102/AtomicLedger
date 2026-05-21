@@ -83,3 +83,10 @@ The system SHALL continue to return the original successful deposit response whe
 #### Scenario: Duplicate deposit idempotency replay is not converted into an error
 - **WHEN** a client repeats a previously successful deposit request using the same `Idempotency-Key`
 - **THEN** the system returns the original successful deposit response instead of an API error
+
+### Requirement: Document the deposit API in OpenAPI
+The system SHALL document `POST /api/v1/wallets/{walletId}/deposit` in OpenAPI, including its request body, success response, standardized error responses, and the required `Idempotency-Key` header.
+
+#### Scenario: Deposit header requirement is documented
+- **WHEN** a developer inspects the deposit operation in the OpenAPI docs
+- **THEN** the documentation marks `Idempotency-Key` as a required header and describes the deposit request and response bodies
