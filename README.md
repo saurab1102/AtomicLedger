@@ -1,5 +1,7 @@
 # AtomicLedger
 
+[![CI](https://github.com/saurab1102/AtomicLedger/actions/workflows/ci.yml/badge.svg)](https://github.com/saurab1102/AtomicLedger/actions/workflows/ci.yml)
+
 AtomicLedger is a production-style backend system for wallet transfers using idempotency keys, database transactions, row-level locking, immutable ledger entries, reconciliation checks, and audit logs.
 
 The goal is to model money movement safely, where duplicate requests, concurrent transfers, failed transactions, and inconsistent balances are handled deliberately.
@@ -23,6 +25,8 @@ Run the tests:
 ```bash
 ./mvnw test
 ```
+
+The GitHub Actions CI workflow runs the same `./mvnw test` command on GitHub-hosted Ubuntu runners, which provide the Docker support needed by the Testcontainers-based integration suite.
 
 ## Inspecting PostgreSQL
 
