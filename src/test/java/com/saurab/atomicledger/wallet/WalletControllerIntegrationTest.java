@@ -92,6 +92,28 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 	}
 
 	@Test
+	void exposesOpenApiDocumentation() throws Exception {
+		MvcResult result = this.mockMvc.perform(get("/v3/api-docs"))
+			.andExpect(status().isOk())
+			.andReturn();
+
+		String responseBody = result.getResponse().getContentAsString();
+
+		assertThat(JsonPath.<String>read(responseBody, "$.info.title")).isEqualTo("AtomicLedger API");
+		assertThat(JsonPath.<String>read(responseBody, "$.info.version")).isEqualTo("v1");
+		assertThat(JsonPath.<String>read(responseBody, "$.paths['/api/v1/transfers'].post.summary")).isEqualTo("Create transfer");
+		assertThat(JsonPath.<String>read(responseBody, "$.paths['/api/v1/wallets'].post.responses['400'].content['application/json'].schema.$ref"))
+			.isEqualTo("#/components/schemas/ApiErrorResponse");
+		assertThat(JsonPath.<String>read(responseBody, "$.components.schemas.ApiErrorResponse.properties.errorCode.type"))
+			.isEqualTo("string");
+		assertThat(JsonPath.<String>read(responseBody, "$.components.schemas.ApiErrorResponse.properties.details.type"))
+			.isEqualTo("array");
+		assertThat(JsonPath.<Boolean>read(responseBody, "$.paths['/api/v1/transfers'].post.parameters[0].required")).isTrue();
+		assertThat(JsonPath.<String>read(responseBody, "$.paths['/api/v1/transfers'].post.parameters[0].name"))
+			.isEqualTo("Idempotency-Key");
+	}
+
+	@Test
 	void rejectsMissingOwnerReference() throws Exception {
 		this.mockMvc.perform(post("/api/v1/wallets")
 			.contentType(MediaType.APPLICATION_JSON)

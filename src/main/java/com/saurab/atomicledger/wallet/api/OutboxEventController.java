@@ -2,6 +2,7 @@ package com.saurab.atomicledger.wallet.api;
 
 import java.util.List;
 
+import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -9,8 +10,17 @@ import org.springframework.web.bind.annotation.RestController;
 import com.saurab.atomicledger.wallet.OutboxEvent;
 import com.saurab.atomicledger.wallet.OutboxEventService;
 
+import io.swagger.v3.oas.annotations.media.ArraySchema;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.responses.ApiResponses;
+import io.swagger.v3.oas.annotations.tags.Tag;
+
 @RestController
 @RequestMapping("/api/v1/outbox-events")
+@Tag(name = "Outbox Events", description = "Outbox event inspection APIs.")
 public class OutboxEventController {
 
 	private final OutboxEventService outboxEventService;
@@ -20,6 +30,14 @@ public class OutboxEventController {
 	}
 
 	@GetMapping
+	@Operation(summary = "List outbox events", description = "Returns all outbox events ordered from newest to oldest.")
+	@ApiResponses({
+		@ApiResponse(
+			responseCode = "200",
+			description = "Outbox events returned successfully.",
+			content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, array = @ArraySchema(schema = @Schema(implementation = OutboxEventResponse.class)))
+		)
+	})
 	public List<OutboxEventResponse> list() {
 		return this.outboxEventService.findAll().stream()
 			.map(this::toResponse)
