@@ -41,3 +41,10 @@ The system SHALL document the audit-log inspection API in OpenAPI, including its
 #### Scenario: Audit-log filters are documented
 - **WHEN** a developer inspects `GET /api/v1/audit-logs` in the OpenAPI docs
 - **THEN** the documentation describes the optional `entityType` and `entityId` query parameters and the audit-log response items
+
+### Requirement: Require API key authentication for audit-log inspection
+The system SHALL require a valid `X-API-Key` header for `GET /api/v1/audit-logs`.
+
+#### Scenario: Audit-log inspection requires API key
+- **WHEN** a client sends `GET /api/v1/audit-logs` without a valid `X-API-Key`
+- **THEN** the system rejects the request with `401 Unauthorized` before running the audit-log query

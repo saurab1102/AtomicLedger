@@ -20,13 +20,19 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
 import com.saurab.atomicledger.PostgresIntegrationTest;
 
-@SpringBootTest(properties = "atomicledger.scheduling.enabled=false")
+@SpringBootTest(properties = {
+	"atomicledger.scheduling.enabled=false",
+	"atomicledger.security.api-key=test-api-key"
+})
 @AutoConfigureMockMvc
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class OperationalMetricsIntegrationTest extends PostgresIntegrationTest {
+
+	private static final String TEST_API_KEY = "test-api-key";
 
 	@Autowired
 	private MockMvc mockMvc;
@@ -97,7 +103,7 @@ class OperationalMetricsIntegrationTest extends PostgresIntegrationTest {
 		transfer("metrics-transfer-001", sourceWalletId, destinationWalletId, "25.00");
 		transfer("metrics-transfer-001", sourceWalletId, destinationWalletId, "25.00");
 
-		this.mockMvc.perform(post("/api/v1/transfers")
+		this.mockMvc.perform(apiPost("/api/v1/transfers")
 			.contentType(MediaType.APPLICATION_JSON)
 			.header("Idempotency-Key", "metrics-transfer-failed")
 			.content("""
@@ -128,7 +134,7 @@ class OperationalMetricsIntegrationTest extends PostgresIntegrationTest {
 		UUID walletId = createWallet("metrics-reconciliation-wallet");
 		deposit(walletId, "metrics-reconciliation-seed", "90.00");
 
-		this.mockMvc.perform(post("/api/v1/reconciliation/run"))
+		this.mockMvc.perform(apiPost("/api/v1/reconciliation/run"))
 			.andExpect(status().isOk());
 
 		this.jdbcTemplate.update(
@@ -137,7 +143,7 @@ class OperationalMetricsIntegrationTest extends PostgresIntegrationTest {
 			walletId
 		);
 
-		this.mockMvc.perform(post("/api/v1/reconciliation/run"))
+		this.mockMvc.perform(apiPost("/api/v1/reconciliation/run"))
 			.andExpect(status().isOk());
 
 		this.outboxEventWorker.publishPendingEvents();
@@ -156,7 +162,7 @@ class OperationalMetricsIntegrationTest extends PostgresIntegrationTest {
 	}
 
 	private UUID createWallet(String ownerReference) throws Exception {
-		MvcResult result = this.mockMvc.perform(post("/api/v1/wallets")
+		MvcResult result = this.mockMvc.perform(apiPost("/api/v1/wallets")
 			.contentType(MediaType.APPLICATION_JSON)
 			.content("""
 				{
@@ -171,7 +177,7 @@ class OperationalMetricsIntegrationTest extends PostgresIntegrationTest {
 	}
 
 	private void deposit(UUID walletId, String idempotencyKey, String amount) throws Exception {
-		this.mockMvc.perform(post("/api/v1/wallets/{walletId}/deposit", walletId)
+		this.mockMvc.perform(apiPost("/api/v1/wallets/{walletId}/deposit", walletId)
 			.contentType(MediaType.APPLICATION_JSON)
 			.header("Idempotency-Key", idempotencyKey)
 			.content("""
@@ -184,7 +190,7 @@ class OperationalMetricsIntegrationTest extends PostgresIntegrationTest {
 	}
 
 	private void transfer(String idempotencyKey, UUID sourceWalletId, UUID destinationWalletId, String amount) throws Exception {
-		this.mockMvc.perform(post("/api/v1/transfers")
+		this.mockMvc.perform(apiPost("/api/v1/transfers")
 			.contentType(MediaType.APPLICATION_JSON)
 			.header("Idempotency-Key", idempotencyKey)
 			.content("""
@@ -196,5 +202,9 @@ class OperationalMetricsIntegrationTest extends PostgresIntegrationTest {
 				}
 				""".formatted(sourceWalletId, destinationWalletId, amount)))
 			.andExpect(status().isCreated());
+	}
+
+	private MockHttpServletRequestBuilder apiPost(String urlTemplate, Object... uriVariables) {
+		return post(urlTemplate, uriVariables).header("X-API-Key", TEST_API_KEY);
 	}
 }

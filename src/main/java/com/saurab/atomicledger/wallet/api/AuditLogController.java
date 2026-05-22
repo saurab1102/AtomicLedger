@@ -38,6 +38,11 @@ public class AuditLogController {
 			responseCode = "200",
 			description = "Audit logs returned successfully.",
 			content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, array = @ArraySchema(schema = @Schema(implementation = AuditLogResponse.class)))
+		),
+		@ApiResponse(
+			responseCode = "401",
+			description = "Missing or invalid API key.",
+			content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ApiErrorResponse.class))
 		)
 	})
 	public List<AuditLogResponse> list(

@@ -27,13 +27,19 @@ import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
 import com.saurab.atomicledger.PostgresIntegrationTest;
 
-@SpringBootTest(properties = "atomicledger.scheduling.enabled=false")
+@SpringBootTest(properties = {
+	"atomicledger.scheduling.enabled=false",
+	"atomicledger.security.api-key=test-api-key"
+})
 @AutoConfigureMockMvc
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class WalletControllerIntegrationTest extends PostgresIntegrationTest {
+
+	private static final String TEST_API_KEY = "test-api-key";
 
 	@Autowired
 	private MockMvc mockMvc;
@@ -70,7 +76,7 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 
 	@Test
 	void createsWalletSuccessfullyAndPersistsIt() throws Exception {
-		MvcResult result = this.mockMvc.perform(post("/api/v1/wallets")
+		MvcResult result = this.mockMvc.perform(apiPost("/api/v1/wallets")
 			.contentType(MediaType.APPLICATION_JSON)
 			.content("""
 				{
@@ -113,11 +119,65 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 		assertThat(JsonPath.<Boolean>read(responseBody, "$.paths['/api/v1/transfers'].post.parameters[0].required")).isTrue();
 		assertThat(JsonPath.<String>read(responseBody, "$.paths['/api/v1/transfers'].post.parameters[0].name"))
 			.isEqualTo("Idempotency-Key");
+		assertThat(JsonPath.<String>read(responseBody, "$.components.securitySchemes.apiKeyAuth.type")).isEqualTo("apiKey");
+		assertThat(JsonPath.<String>read(responseBody, "$.components.securitySchemes.apiKeyAuth.in")).isEqualTo("header");
+		assertThat(JsonPath.<String>read(responseBody, "$.components.securitySchemes.apiKeyAuth.name")).isEqualTo("X-API-Key");
+		assertThat(JsonPath.<List<String>>read(responseBody, "$.paths['/api/v1/wallets'].post.security[0].apiKeyAuth")).isEmpty();
+	}
+
+	@Test
+	void allowsSwaggerUiWithoutApiKey() throws Exception {
+		this.mockMvc.perform(get("/swagger-ui/index.html"))
+			.andExpect(status().isOk());
+	}
+
+	@Test
+	void allowsActuatorHealthWithoutApiKey() throws Exception {
+		this.mockMvc.perform(get("/actuator/health"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.status").isNotEmpty());
+	}
+
+	@Test
+	void rejectsMissingApiKeyForProtectedEndpoint() throws Exception {
+		this.mockMvc.perform(post("/api/v1/wallets")
+			.contentType(MediaType.APPLICATION_JSON)
+			.content("""
+				{
+				  "ownerReference": "customer-123",
+				  "currency": "INR"
+				}
+				"""))
+			.andExpect(status().isUnauthorized())
+			.andExpect(jsonPath("$.errorCode").value("MISSING_API_KEY"))
+			.andExpect(jsonPath("$.message").value("X-API-Key header is required"))
+			.andExpect(jsonPath("$.details[0].field").value("X-API-Key"))
+			.andExpect(jsonPath("$.details[0].message").value("X-API-Key header is required"))
+			.andExpect(jsonPath("$.timestamp").isNotEmpty());
+	}
+
+	@Test
+	void rejectsInvalidApiKeyForProtectedEndpoint() throws Exception {
+		this.mockMvc.perform(post("/api/v1/wallets")
+			.header("X-API-Key", "wrong-key")
+			.contentType(MediaType.APPLICATION_JSON)
+			.content("""
+				{
+				  "ownerReference": "customer-123",
+				  "currency": "INR"
+				}
+				"""))
+			.andExpect(status().isUnauthorized())
+			.andExpect(jsonPath("$.errorCode").value("INVALID_API_KEY"))
+			.andExpect(jsonPath("$.message").value("X-API-Key is invalid"))
+			.andExpect(jsonPath("$.details[0].field").value("X-API-Key"))
+			.andExpect(jsonPath("$.details[0].message").value("X-API-Key is invalid"))
+			.andExpect(jsonPath("$.timestamp").isNotEmpty());
 	}
 
 	@Test
 	void rejectsMissingOwnerReference() throws Exception {
-		this.mockMvc.perform(post("/api/v1/wallets")
+		this.mockMvc.perform(apiPost("/api/v1/wallets")
 			.contentType(MediaType.APPLICATION_JSON)
 			.content("""
 				{
@@ -134,7 +194,7 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 
 	@Test
 	void rejectsUnsupportedCurrency() throws Exception {
-		this.mockMvc.perform(post("/api/v1/wallets")
+		this.mockMvc.perform(apiPost("/api/v1/wallets")
 			.contentType(MediaType.APPLICATION_JSON)
 			.content("""
 				{
@@ -152,7 +212,7 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 
 	@Test
 	void initializesWalletWithZeroAvailableBalanceAndActiveStatus() throws Exception {
-		this.mockMvc.perform(post("/api/v1/wallets")
+		this.mockMvc.perform(apiPost("/api/v1/wallets")
 			.contentType(MediaType.APPLICATION_JSON)
 			.content("""
 				{
@@ -173,7 +233,7 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 	void depositsSuccessfullyAndPersistsAccountingRecords() throws Exception {
 		UUID walletId = createWallet("depositor-123");
 
-		MvcResult result = this.mockMvc.perform(post("/api/v1/wallets/{walletId}/deposit", walletId)
+		MvcResult result = this.mockMvc.perform(apiPost("/api/v1/wallets/{walletId}/deposit", walletId)
 			.contentType(MediaType.APPLICATION_JSON)
 			.header("Idempotency-Key", "deposit-001")
 			.content("""
@@ -217,7 +277,7 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 	void rejectsMissingIdempotencyKey() throws Exception {
 		UUID walletId = createWallet("depositor-124");
 
-		this.mockMvc.perform(post("/api/v1/wallets/{walletId}/deposit", walletId)
+		this.mockMvc.perform(apiPost("/api/v1/wallets/{walletId}/deposit", walletId)
 			.contentType(MediaType.APPLICATION_JSON)
 			.content("""
 				{
@@ -237,7 +297,7 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 	void rejectsInvalidAmount() throws Exception {
 		UUID walletId = createWallet("depositor-125");
 
-		this.mockMvc.perform(post("/api/v1/wallets/{walletId}/deposit", walletId)
+		this.mockMvc.perform(apiPost("/api/v1/wallets/{walletId}/deposit", walletId)
 			.contentType(MediaType.APPLICATION_JSON)
 			.header("Idempotency-Key", "deposit-002")
 			.content("""
@@ -258,7 +318,7 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 	void rejectsUnsupportedDepositCurrency() throws Exception {
 		UUID walletId = createWallet("depositor-126");
 
-		this.mockMvc.perform(post("/api/v1/wallets/{walletId}/deposit", walletId)
+		this.mockMvc.perform(apiPost("/api/v1/wallets/{walletId}/deposit", walletId)
 			.contentType(MediaType.APPLICATION_JSON)
 			.header("Idempotency-Key", "deposit-003")
 			.content("""
@@ -277,7 +337,7 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 
 	@Test
 	void rejectsDepositWhenWalletIsMissing() throws Exception {
-		this.mockMvc.perform(post("/api/v1/wallets/{walletId}/deposit", UUID.randomUUID())
+		this.mockMvc.perform(apiPost("/api/v1/wallets/{walletId}/deposit", UUID.randomUUID())
 			.contentType(MediaType.APPLICATION_JSON)
 			.header("Idempotency-Key", "deposit-004")
 			.content("""
@@ -298,7 +358,7 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 	void reusesOriginalResultForDuplicateIdempotencyKey() throws Exception {
 		UUID walletId = createWallet("depositor-127");
 
-		MvcResult firstResult = this.mockMvc.perform(post("/api/v1/wallets/{walletId}/deposit", walletId)
+		MvcResult firstResult = this.mockMvc.perform(apiPost("/api/v1/wallets/{walletId}/deposit", walletId)
 			.contentType(MediaType.APPLICATION_JSON)
 			.header("Idempotency-Key", "deposit-duplicate")
 			.content("""
@@ -312,7 +372,7 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 
 		String firstBody = firstResult.getResponse().getContentAsString();
 
-		MvcResult secondResult = this.mockMvc.perform(post("/api/v1/wallets/{walletId}/deposit", walletId)
+		MvcResult secondResult = this.mockMvc.perform(apiPost("/api/v1/wallets/{walletId}/deposit", walletId)
 			.contentType(MediaType.APPLICATION_JSON)
 			.header("Idempotency-Key", "deposit-duplicate")
 			.content("""
@@ -339,7 +399,7 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 		UUID destinationWalletId = createWallet("destination-001");
 		deposit(sourceWalletId, "seed-source-001", "200.00");
 
-		MvcResult result = this.mockMvc.perform(post("/api/v1/transfers")
+		MvcResult result = this.mockMvc.perform(apiPost("/api/v1/transfers")
 			.contentType(MediaType.APPLICATION_JSON)
 			.header("Idempotency-Key", "transfer-001")
 			.content("""
@@ -391,7 +451,7 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 		UUID sourceWalletId = createWallet("source-002");
 		UUID destinationWalletId = createWallet("destination-002");
 
-		this.mockMvc.perform(post("/api/v1/transfers")
+		this.mockMvc.perform(apiPost("/api/v1/transfers")
 			.contentType(MediaType.APPLICATION_JSON)
 			.header("Idempotency-Key", "transfer-002")
 			.content("""
@@ -415,7 +475,7 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 		UUID walletId = createWallet("same-wallet");
 		deposit(walletId, "seed-same-wallet", "50.00");
 
-		this.mockMvc.perform(post("/api/v1/transfers")
+		this.mockMvc.perform(apiPost("/api/v1/transfers")
 			.contentType(MediaType.APPLICATION_JSON)
 			.header("Idempotency-Key", "transfer-003")
 			.content("""
@@ -440,7 +500,7 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 		UUID destinationWalletId = createWallet("destination-003");
 		deposit(sourceWalletId, "seed-source-003", "30.00");
 
-		this.mockMvc.perform(post("/api/v1/transfers")
+		this.mockMvc.perform(apiPost("/api/v1/transfers")
 			.contentType(MediaType.APPLICATION_JSON)
 			.content("""
 				{
@@ -464,7 +524,7 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 		UUID destinationWalletId = createWallet("destination-004");
 		deposit(sourceWalletId, "seed-source-004", "30.00");
 
-		this.mockMvc.perform(post("/api/v1/transfers")
+		this.mockMvc.perform(apiPost("/api/v1/transfers")
 			.contentType(MediaType.APPLICATION_JSON)
 			.header("Idempotency-Key", "transfer-004")
 			.content("""
@@ -488,7 +548,7 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 		UUID sourceWalletId = createWallet("source-005");
 		deposit(sourceWalletId, "seed-source-005", "30.00");
 
-		this.mockMvc.perform(post("/api/v1/transfers")
+		this.mockMvc.perform(apiPost("/api/v1/transfers")
 			.contentType(MediaType.APPLICATION_JSON)
 			.header("Idempotency-Key", "transfer-005")
 			.content("""
@@ -513,7 +573,7 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 		UUID destinationWalletId = createWallet("destination-006");
 		deposit(sourceWalletId, "seed-source-006", "120.00");
 
-		MvcResult firstResult = this.mockMvc.perform(post("/api/v1/transfers")
+		MvcResult firstResult = this.mockMvc.perform(apiPost("/api/v1/transfers")
 			.contentType(MediaType.APPLICATION_JSON)
 			.header("Idempotency-Key", "transfer-duplicate")
 			.content("""
@@ -530,7 +590,7 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 		String firstBody = firstResult.getResponse().getContentAsString();
 		UUID transactionId = UUID.fromString(JsonPath.read(firstBody, "$.transactionId"));
 
-		MvcResult secondResult = this.mockMvc.perform(post("/api/v1/transfers")
+		MvcResult secondResult = this.mockMvc.perform(apiPost("/api/v1/transfers")
 			.contentType(MediaType.APPLICATION_JSON)
 			.header("Idempotency-Key", "transfer-duplicate")
 			.content("""
@@ -634,7 +694,7 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 		UUID walletId = createWallet("history-deposit-wallet");
 		UUID depositTransactionId = depositAndReturnTransactionId(walletId, "history-deposit-001", "125.00");
 
-		this.mockMvc.perform(get("/api/v1/wallets/{walletId}/transactions", walletId))
+		this.mockMvc.perform(apiGet("/api/v1/wallets/{walletId}/transactions", walletId))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.page").value(0))
 			.andExpect(jsonPath("$.size").value(20))
@@ -656,7 +716,7 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 		deposit(sourceWalletId, "history-seed-source", "200.00");
 		UUID transferTransactionId = transfer("history-transfer-001", sourceWalletId, destinationWalletId, "80.00");
 
-		this.mockMvc.perform(get("/api/v1/wallets/{walletId}/transactions", sourceWalletId))
+		this.mockMvc.perform(apiGet("/api/v1/wallets/{walletId}/transactions", sourceWalletId))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.content[0].transactionId").value(transferTransactionId.toString()))
 			.andExpect(jsonPath("$.content[0].type").value("TRANSFER"))
@@ -664,7 +724,7 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 			.andExpect(jsonPath("$.content[0].counterpartyWalletId").value(destinationWalletId.toString()))
 			.andExpect(jsonPath("$.content[0].createdAt").isNotEmpty());
 
-		this.mockMvc.perform(get("/api/v1/wallets/{walletId}/transactions", destinationWalletId))
+		this.mockMvc.perform(apiGet("/api/v1/wallets/{walletId}/transactions", destinationWalletId))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.content[0].transactionId").value(transferTransactionId.toString()))
 			.andExpect(jsonPath("$.content[0].type").value("TRANSFER"))
@@ -680,7 +740,7 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 		deposit(walletId, "history-page-002", "20.00");
 		deposit(walletId, "history-page-003", "30.00");
 
-		this.mockMvc.perform(get("/api/v1/wallets/{walletId}/transactions", walletId)
+		this.mockMvc.perform(apiGet("/api/v1/wallets/{walletId}/transactions", walletId)
 			.param("page", "1")
 			.param("size", "2")
 			.param("sort", "amount,asc"))
@@ -696,7 +756,7 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 
 	@Test
 	void returnsNotFoundForMissingWalletTransactionHistory() throws Exception {
-		this.mockMvc.perform(get("/api/v1/wallets/{walletId}/transactions", UUID.randomUUID()))
+		this.mockMvc.perform(apiGet("/api/v1/wallets/{walletId}/transactions", UUID.randomUUID()))
 			.andExpect(status().isNotFound())
 			.andExpect(jsonPath("$.errorCode").value("WALLET_NOT_FOUND"))
 			.andExpect(jsonPath("$.message").value("wallet not found"))
@@ -712,7 +772,7 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 		deposit(sourceWalletId, "recon-seed-001", "250.00");
 		transfer("recon-transfer-001", sourceWalletId, destinationWalletId, "100.00");
 
-		this.mockMvc.perform(post("/api/v1/reconciliation/run"))
+		this.mockMvc.perform(apiPost("/api/v1/reconciliation/run"))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.status").value("PASS"))
 			.andExpect(jsonPath("$.failedChecks").isEmpty());
@@ -728,7 +788,7 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 			walletId
 		);
 
-		this.mockMvc.perform(post("/api/v1/reconciliation/run"))
+		this.mockMvc.perform(apiPost("/api/v1/reconciliation/run"))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.status").value("FAIL"))
 			.andExpect(jsonPath("$.failedChecks[0].checkType").value("WALLET_BALANCE_MISMATCH"))
@@ -749,7 +809,7 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 			.orElseThrow();
 		this.jdbcTemplate.update("delete from ledger_entries where id = ?", creditedEntry.getId());
 
-		this.mockMvc.perform(post("/api/v1/reconciliation/run"))
+		this.mockMvc.perform(apiPost("/api/v1/reconciliation/run"))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.status").value("FAIL"))
 			.andExpect(jsonPath("$.failedChecks[*].checkType").value(org.hamcrest.Matchers.hasItem("TRANSFER_LEDGER_STRUCTURE_MISMATCH")))
@@ -773,7 +833,7 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 			debitEntry.getId()
 		);
 
-		this.mockMvc.perform(post("/api/v1/reconciliation/run"))
+		this.mockMvc.perform(apiPost("/api/v1/reconciliation/run"))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.status").value("FAIL"))
 			.andExpect(jsonPath("$.failedChecks[*].checkType").value(org.hamcrest.Matchers.hasItem("TRANSFER_LEDGER_AMOUNT_MISMATCH")))
@@ -794,7 +854,7 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 				AuditAction.TRANSFER_SUCCEEDED
 			);
 
-		this.mockMvc.perform(get("/api/v1/audit-logs")
+		this.mockMvc.perform(apiGet("/api/v1/audit-logs")
 			.param("entityType", "TRANSACTION")
 			.param("entityId", transferTransactionId.toString()))
 			.andExpect(status().isOk())
@@ -824,7 +884,7 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 			.orElseThrow();
 		assertThat(transferEvent.getStatus()).isEqualTo(OutboxEventStatus.PENDING);
 
-		this.mockMvc.perform(get("/api/v1/outbox-events"))
+		this.mockMvc.perform(apiGet("/api/v1/outbox-events"))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$[*].eventType").value(org.hamcrest.Matchers.hasItems(
 				"WALLET_CREATED",
@@ -838,7 +898,7 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 	void createsAuditLogsForDuplicateIdempotencyRequestsAndFailedTransfer() throws Exception {
 		UUID depositWalletId = createWallet("audit-depositor-duplicate");
 
-		this.mockMvc.perform(post("/api/v1/wallets/{walletId}/deposit", depositWalletId)
+		this.mockMvc.perform(apiPost("/api/v1/wallets/{walletId}/deposit", depositWalletId)
 			.contentType(MediaType.APPLICATION_JSON)
 			.header("Idempotency-Key", "audit-deposit-duplicate")
 			.content("""
@@ -848,7 +908,7 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 				}
 				"""))
 			.andExpect(status().isCreated());
-		this.mockMvc.perform(post("/api/v1/wallets/{walletId}/deposit", depositWalletId)
+		this.mockMvc.perform(apiPost("/api/v1/wallets/{walletId}/deposit", depositWalletId)
 			.contentType(MediaType.APPLICATION_JSON)
 			.header("Idempotency-Key", "audit-deposit-duplicate")
 			.content("""
@@ -862,7 +922,7 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 		UUID sourceWalletId = createWallet("audit-source-002");
 		UUID destinationWalletId = createWallet("audit-destination-002");
 		deposit(sourceWalletId, "audit-seed-source-002", "100.00");
-		this.mockMvc.perform(post("/api/v1/transfers")
+		this.mockMvc.perform(apiPost("/api/v1/transfers")
 			.contentType(MediaType.APPLICATION_JSON)
 			.header("Idempotency-Key", "audit-transfer-duplicate")
 			.content("""
@@ -874,7 +934,7 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 				}
 				""".formatted(sourceWalletId, destinationWalletId)))
 			.andExpect(status().isCreated());
-		this.mockMvc.perform(post("/api/v1/transfers")
+		this.mockMvc.perform(apiPost("/api/v1/transfers")
 			.contentType(MediaType.APPLICATION_JSON)
 			.header("Idempotency-Key", "audit-transfer-duplicate")
 			.content("""
@@ -889,7 +949,7 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 
 		UUID failedSourceWalletId = createWallet("audit-source-failed");
 		UUID failedDestinationWalletId = createWallet("audit-destination-failed");
-		this.mockMvc.perform(post("/api/v1/transfers")
+		this.mockMvc.perform(apiPost("/api/v1/transfers")
 			.contentType(MediaType.APPLICATION_JSON)
 			.header("Idempotency-Key", "audit-transfer-insufficient")
 			.content("""
@@ -915,7 +975,7 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 		UUID sourceWalletId = createWallet("outbox-source-failed");
 		UUID destinationWalletId = createWallet("outbox-destination-failed");
 
-		this.mockMvc.perform(post("/api/v1/transfers")
+		this.mockMvc.perform(apiPost("/api/v1/transfers")
 			.contentType(MediaType.APPLICATION_JSON)
 			.header("Idempotency-Key", "outbox-transfer-insufficient")
 			.content("""
@@ -946,7 +1006,7 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 		UUID walletId = createWallet("audit-reconciliation-wallet");
 		deposit(walletId, "audit-reconciliation-seed", "90.00");
 
-		this.mockMvc.perform(post("/api/v1/reconciliation/run"))
+		this.mockMvc.perform(apiPost("/api/v1/reconciliation/run"))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.status").value("PASS"));
 
@@ -956,7 +1016,7 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 			walletId
 		);
 
-		this.mockMvc.perform(post("/api/v1/reconciliation/run"))
+		this.mockMvc.perform(apiPost("/api/v1/reconciliation/run"))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.status").value("FAIL"));
 
@@ -975,7 +1035,7 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 			walletId
 		);
 
-		this.mockMvc.perform(post("/api/v1/reconciliation/run"))
+		this.mockMvc.perform(apiPost("/api/v1/reconciliation/run"))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.status").value("FAIL"));
 
@@ -1020,7 +1080,7 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 			ready.countDown();
 			start.await();
 
-			MvcResult result = this.mockMvc.perform(post("/api/v1/transfers")
+			MvcResult result = this.mockMvc.perform(apiPost("/api/v1/transfers")
 				.contentType(MediaType.APPLICATION_JSON)
 				.header("Idempotency-Key", idempotencyKey)
 				.content("""
@@ -1041,7 +1101,7 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 	}
 
 	private UUID transfer(String idempotencyKey, UUID sourceWalletId, UUID destinationWalletId, String amount) throws Exception {
-		MvcResult result = this.mockMvc.perform(post("/api/v1/transfers")
+		MvcResult result = this.mockMvc.perform(apiPost("/api/v1/transfers")
 			.contentType(MediaType.APPLICATION_JSON)
 			.header("Idempotency-Key", idempotencyKey)
 			.content("""
@@ -1059,7 +1119,7 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 	}
 
 	private void deposit(UUID walletId, String idempotencyKey, String amount) throws Exception {
-		this.mockMvc.perform(post("/api/v1/wallets/{walletId}/deposit", walletId)
+		this.mockMvc.perform(apiPost("/api/v1/wallets/{walletId}/deposit", walletId)
 			.contentType(MediaType.APPLICATION_JSON)
 			.header("Idempotency-Key", idempotencyKey)
 			.content("""
@@ -1072,7 +1132,7 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 	}
 
 	private UUID depositAndReturnTransactionId(UUID walletId, String idempotencyKey, String amount) throws Exception {
-		MvcResult result = this.mockMvc.perform(post("/api/v1/wallets/{walletId}/deposit", walletId)
+		MvcResult result = this.mockMvc.perform(apiPost("/api/v1/wallets/{walletId}/deposit", walletId)
 			.contentType(MediaType.APPLICATION_JSON)
 			.header("Idempotency-Key", idempotencyKey)
 			.content("""
@@ -1088,7 +1148,7 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 	}
 
 	private UUID createWallet(String ownerReference) throws Exception {
-		MvcResult result = this.mockMvc.perform(post("/api/v1/wallets")
+		MvcResult result = this.mockMvc.perform(apiPost("/api/v1/wallets")
 			.contentType(MediaType.APPLICATION_JSON)
 			.content("""
 				{
@@ -1100,6 +1160,14 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 			.andReturn();
 
 		return UUID.fromString(JsonPath.read(result.getResponse().getContentAsString(), "$.id"));
+	}
+
+	private MockHttpServletRequestBuilder apiPost(String urlTemplate, Object... uriVariables) {
+		return post(urlTemplate, uriVariables).header("X-API-Key", TEST_API_KEY);
+	}
+
+	private MockHttpServletRequestBuilder apiGet(String urlTemplate, Object... uriVariables) {
+		return get(urlTemplate, uriVariables).header("X-API-Key", TEST_API_KEY);
 	}
 
 	private record TransferAttemptResult(int statusCode, String responseBody) {

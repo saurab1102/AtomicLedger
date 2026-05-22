@@ -65,6 +65,11 @@ public class WalletController {
 			responseCode = "400",
 			description = "Validation or currency error.",
 			content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ApiErrorResponse.class))
+		),
+		@ApiResponse(
+			responseCode = "401",
+			description = "Missing or invalid API key.",
+			content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ApiErrorResponse.class))
 		)
 	})
 	public WalletResponse createWallet(@Valid @RequestBody CreateWalletRequest request) {
@@ -106,6 +111,11 @@ public class WalletController {
 			responseCode = "404",
 			description = "Wallet not found.",
 			content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ApiErrorResponse.class))
+		),
+		@ApiResponse(
+			responseCode = "401",
+			description = "Missing or invalid API key.",
+			content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ApiErrorResponse.class))
 		)
 	})
 	public DepositResponse deposit(
@@ -129,6 +139,11 @@ public class WalletController {
 		@ApiResponse(
 			responseCode = "404",
 			description = "Wallet not found.",
+			content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ApiErrorResponse.class))
+		),
+		@ApiResponse(
+			responseCode = "401",
+			description = "Missing or invalid API key.",
 			content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ApiErrorResponse.class))
 		)
 	})

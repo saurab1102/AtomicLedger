@@ -1,6 +1,5 @@
 package com.saurab.atomicledger.wallet.api;
 
-import java.time.Instant;
 import java.util.Comparator;
 import java.util.List;
 
@@ -21,6 +20,12 @@ import com.saurab.atomicledger.wallet.WalletNotFoundException;
 
 @RestControllerAdvice
 public class WalletExceptionHandler {
+
+	private final ApiErrorResponseFactory apiErrorResponseFactory;
+
+	public WalletExceptionHandler(ApiErrorResponseFactory apiErrorResponseFactory) {
+		this.apiErrorResponseFactory = apiErrorResponseFactory;
+	}
 
 	@ExceptionHandler(MethodArgumentNotValidException.class)
 	public ResponseEntity<ApiErrorResponse> handleMethodArgumentNotValid(MethodArgumentNotValidException exception) {
@@ -114,6 +119,6 @@ public class WalletExceptionHandler {
 		String message,
 		List<ApiErrorDetailResponse> details
 	) {
-		return ResponseEntity.status(status).body(new ApiErrorResponse(errorCode, message, details, Instant.now()));
+		return ResponseEntity.status(status).body(this.apiErrorResponseFactory.create(errorCode, message, details));
 	}
 }

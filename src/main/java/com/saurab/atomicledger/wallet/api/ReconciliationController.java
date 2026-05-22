@@ -32,6 +32,11 @@ public class ReconciliationController {
 			responseCode = "200",
 			description = "Reconciliation run completed.",
 			content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ReconciliationResponse.class))
+		),
+		@ApiResponse(
+			responseCode = "401",
+			description = "Missing or invalid API key.",
+			content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ApiErrorResponse.class))
 		)
 	})
 	public ReconciliationResponse run() {

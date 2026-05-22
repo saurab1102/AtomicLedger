@@ -18,3 +18,7 @@ management:
   endpoint:
     health:
       show-details: always
+
+atomicledger:
+  security:
+    api-key: ${ATOMICLEDGER_API_KEY:atomicledger-local-api-key}

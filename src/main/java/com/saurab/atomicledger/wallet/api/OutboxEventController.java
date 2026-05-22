@@ -36,6 +36,11 @@ public class OutboxEventController {
 			responseCode = "200",
 			description = "Outbox events returned successfully.",
 			content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, array = @ArraySchema(schema = @Schema(implementation = OutboxEventResponse.class)))
+		),
+		@ApiResponse(
+			responseCode = "401",
+			description = "Missing or invalid API key.",
+			content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ApiErrorResponse.class))
 		)
 	})
 	public List<OutboxEventResponse> list() {
