@@ -841,6 +841,24 @@ class WalletControllerIntegrationTest extends PostgresIntegrationTest {
 	}
 
 	@Test
+	void failsReconciliationForDepositMissingCreditLedgerEntry() throws Exception {
+		UUID walletId = createWallet("recon-deposit-wallet-001");
+		UUID transactionId = depositAndReturnTransactionId(walletId, "recon-deposit-001", "75.00");
+
+		LedgerEntry creditEntry = this.ledgerEntryRepository.findAllByTransactionId(transactionId).stream()
+			.filter(entry -> entry.getEntryType() == LedgerEntryType.CREDIT)
+			.findFirst()
+			.orElseThrow();
+		this.jdbcTemplate.update("delete from ledger_entries where id = ?", creditEntry.getId());
+
+		this.mockMvc.perform(apiPost("/api/v1/reconciliation/run"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.status").value("FAIL"))
+			.andExpect(jsonPath("$.failedChecks[*].checkType").value(org.hamcrest.Matchers.hasItem("DEPOSIT_LEDGER_STRUCTURE_MISMATCH")))
+			.andExpect(jsonPath("$.failedChecks[*].entityId").value(org.hamcrest.Matchers.hasItem(transactionId.toString())));
+	}
+
+	@Test
 	void createsAuditLogsForWalletCreationDepositAndTransferAndSupportsAuditLogFiltering() throws Exception {
 		UUID sourceWalletId = createWallet("audit-source-001");
 		deposit(sourceWalletId, "audit-deposit-001", "150.00");

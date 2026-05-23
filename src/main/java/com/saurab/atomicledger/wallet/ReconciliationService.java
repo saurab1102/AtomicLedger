@@ -1,15 +1,17 @@
 package com.saurab.atomicledger.wallet;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -21,9 +23,9 @@ public class ReconciliationService {
 
 	private static final Logger LOGGER = LoggerFactory.getLogger(ReconciliationService.class);
 	private static final BigDecimal ZERO = BigDecimal.ZERO.setScale(2);
+	private static final int MAX_FAILED_CHECKS_PER_TYPE = 100;
 
 	private final WalletRepository walletRepository;
-	private final WalletTransactionRepository walletTransactionRepository;
 	private final LedgerEntryRepository ledgerEntryRepository;
 	private final AuditLogService auditLogService;
 	private final OutboxEventService outboxEventService;
@@ -31,14 +33,12 @@ public class ReconciliationService {
 
 	public ReconciliationService(
 		WalletRepository walletRepository,
-		WalletTransactionRepository walletTransactionRepository,
 		LedgerEntryRepository ledgerEntryRepository,
 		AuditLogService auditLogService,
 		OutboxEventService outboxEventService,
 		OperationalMetrics operationalMetrics
 	) {
 		this.walletRepository = walletRepository;
-		this.walletTransactionRepository = walletTransactionRepository;
 		this.ledgerEntryRepository = ledgerEntryRepository;
 		this.auditLogService = auditLogService;
 		this.outboxEventService = outboxEventService;
@@ -48,10 +48,11 @@ public class ReconciliationService {
 	@Transactional
 	public ReconciliationResponse run() {
 		List<ReconciliationFailedCheckResponse> failedChecks = new ArrayList<>();
+		Map<String, Integer> failedCheckCounts = new HashMap<>();
 
-		reconcileWalletBalances(failedChecks);
-		reconcileTransfers(failedChecks);
-		reconcileDeposits(failedChecks);
+		runTimedCheck("wallet", failedChecks, () -> reconcileWalletBalances(failedChecks, failedCheckCounts));
+		runTimedCheck("transfer", failedChecks, () -> reconcileTransfers(failedChecks, failedCheckCounts));
+		runTimedCheck("deposit", failedChecks, () -> reconcileDeposits(failedChecks, failedCheckCounts));
 
 		ReconciliationStatus status = failedChecks.isEmpty() ? ReconciliationStatus.PASS : ReconciliationStatus.FAIL;
 		this.operationalMetrics.incrementReconciliationRuns();
@@ -80,6 +81,22 @@ public class ReconciliationService {
 		return new ReconciliationResponse(status.name(), failedChecks);
 	}
 
+	private void runTimedCheck(String phaseName, List<ReconciliationFailedCheckResponse> failedChecks, Runnable check) {
+		long startedAt = System.nanoTime();
+		int failedChecksBefore = failedChecks.size();
+		check.run();
+		long durationInMillis = Duration.ofNanos(System.nanoTime() - startedAt).toMillis();
+		logReconciliationPhaseDuration(phaseName, durationInMillis, failedChecks.size() - failedChecksBefore);
+	}
+
+	private void logReconciliationPhaseDuration(String phaseName, long durationInMillis, int addedFailedChecks) {
+		LOGGER.atInfo()
+			.addKeyValue("phase", phaseName)
+			.addKeyValue("durationMs", durationInMillis)
+			.addKeyValue("addedFailedChecks", addedFailedChecks)
+			.log("reconciliation_phase_completed");
+	}
+
 	private void logReconciliationOutcome(ReconciliationStatus status, int failedCheckCount) {
 		LOGGER.atInfo()
 			.addKeyValue("reconciliationStatus", status.name())
@@ -87,7 +104,10 @@ public class ReconciliationService {
 			.log("reconciliation_completed");
 	}
 
-	private void reconcileWalletBalances(List<ReconciliationFailedCheckResponse> failedChecks) {
+	private void reconcileWalletBalances(
+		List<ReconciliationFailedCheckResponse> failedChecks,
+		Map<String, Integer> failedCheckCounts
+	) {
 		// Wallet balances are cached state; reconciliation proves they still match the ledger truth.
 		Map<UUID, BigDecimal> derivedBalancesByWalletId = this.ledgerEntryRepository.summarizeDerivedBalancesByWallet().stream()
 			.collect(Collectors.toMap(
@@ -98,7 +118,7 @@ public class ReconciliationService {
 		for (Wallet wallet : this.walletRepository.findAll()) {
 			BigDecimal derivedBalance = derivedBalancesByWalletId.getOrDefault(wallet.getId(), ZERO);
 			if (wallet.getAvailableBalance().compareTo(derivedBalance) != 0) {
-				failedChecks.add(new ReconciliationFailedCheckResponse(
+				addFailedCheck(failedChecks, failedCheckCounts, new ReconciliationFailedCheckResponse(
 					"WALLET_BALANCE_MISMATCH",
 					"WALLET",
 					wallet.getId().toString(),
@@ -108,68 +128,57 @@ public class ReconciliationService {
 		}
 	}
 
-	private void reconcileTransfers(List<ReconciliationFailedCheckResponse> failedChecks) {
+	private void reconcileTransfers(
+		List<ReconciliationFailedCheckResponse> failedChecks,
+		Map<String, Integer> failedCheckCounts
+	) {
 		// A successful transfer must remain a balanced double-entry movement: one debit and one credit.
-		for (WalletTransaction transaction : this.walletTransactionRepository.findAllByStatusAndTransactionType(
-			WalletTransactionStatus.SUCCEEDED,
-			WalletTransactionType.TRANSFER
-		)) {
-			List<LedgerEntry> entries = this.ledgerEntryRepository.findAllByTransactionId(transaction.getId());
-			long debitCount = entries.stream().filter(hasEntryType(LedgerEntryType.DEBIT)).count();
-			long creditCount = entries.stream().filter(hasEntryType(LedgerEntryType.CREDIT)).count();
+		PageRequest limitedRows = PageRequest.of(0, MAX_FAILED_CHECKS_PER_TYPE);
 
-			if (entries.size() != 2 || debitCount != 1 || creditCount != 1) {
-				failedChecks.add(new ReconciliationFailedCheckResponse(
+		for (UUID transactionId : this.ledgerEntryRepository.findTransferStructureMismatchTransactionIds(limitedRows)) {
+			addFailedCheck(failedChecks, failedCheckCounts, new ReconciliationFailedCheckResponse(
 					"TRANSFER_LEDGER_STRUCTURE_MISMATCH",
 					"TRANSACTION",
-					transaction.getId().toString(),
+					transactionId.toString(),
 					"successful transfer must have exactly one DEBIT and one CREDIT ledger entry"
 				));
-			}
+		}
 
-			BigDecimal debitAmount = sumAmounts(entries, LedgerEntryType.DEBIT);
-			BigDecimal creditAmount = sumAmounts(entries, LedgerEntryType.CREDIT);
-
-			if (debitAmount.compareTo(creditAmount) != 0) {
-				failedChecks.add(new ReconciliationFailedCheckResponse(
+		for (UUID transactionId : this.ledgerEntryRepository.findTransferAmountMismatchTransactionIds(limitedRows)) {
+			addFailedCheck(failedChecks, failedCheckCounts, new ReconciliationFailedCheckResponse(
 					"TRANSFER_LEDGER_AMOUNT_MISMATCH",
 					"TRANSACTION",
-					transaction.getId().toString(),
+					transactionId.toString(),
 					"successful transfer must have equal total DEBIT and CREDIT amounts"
 				));
-			}
 		}
 	}
 
-	private void reconcileDeposits(List<ReconciliationFailedCheckResponse> failedChecks) {
+	private void reconcileDeposits(
+		List<ReconciliationFailedCheckResponse> failedChecks,
+		Map<String, Integer> failedCheckCounts
+	) {
 		// Successful deposits are expected to create exactly one credit entry for the target wallet.
-		for (WalletTransaction transaction : this.walletTransactionRepository.findAllByStatusAndTransactionType(
-			WalletTransactionStatus.SUCCEEDED,
-			WalletTransactionType.DEPOSIT
-		)) {
-			List<LedgerEntry> entries = this.ledgerEntryRepository.findAllByTransactionId(transaction.getId());
-			long creditCount = entries.stream().filter(hasEntryType(LedgerEntryType.CREDIT)).count();
-
-			if (entries.size() != 1 || creditCount != 1) {
-				failedChecks.add(new ReconciliationFailedCheckResponse(
+		PageRequest limitedRows = PageRequest.of(0, MAX_FAILED_CHECKS_PER_TYPE);
+		for (UUID transactionId : this.ledgerEntryRepository.findDepositStructureMismatchTransactionIds(limitedRows)) {
+			addFailedCheck(failedChecks, failedCheckCounts, new ReconciliationFailedCheckResponse(
 					"DEPOSIT_LEDGER_STRUCTURE_MISMATCH",
 					"TRANSACTION",
-					transaction.getId().toString(),
+					transactionId.toString(),
 					"successful deposit must have exactly one CREDIT ledger entry"
 				));
-			}
 		}
 	}
 
-	private Predicate<LedgerEntry> hasEntryType(LedgerEntryType entryType) {
-		return entry -> entry.getEntryType() == entryType;
-	}
-
-	private BigDecimal sumAmounts(List<LedgerEntry> entries, LedgerEntryType entryType) {
-		return entries.stream()
-			.filter(hasEntryType(entryType))
-			.map(LedgerEntry::getAmount)
-			.reduce(ZERO, BigDecimal::add)
-			.setScale(2);
+	private void addFailedCheck(
+		List<ReconciliationFailedCheckResponse> failedChecks,
+		Map<String, Integer> failedCheckCounts,
+		ReconciliationFailedCheckResponse failedCheck
+	) {
+		int countForType = failedCheckCounts.getOrDefault(failedCheck.checkType(), 0);
+		if (countForType < MAX_FAILED_CHECKS_PER_TYPE) {
+			failedChecks.add(failedCheck);
+		}
+		failedCheckCounts.put(failedCheck.checkType(), countForType + 1);
 	}
 }
