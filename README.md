@@ -221,6 +221,14 @@ Useful environment variables:
 
 This script is for local behavior exercise and rough load exploration, not production-grade benchmarking.
 
+## Load Testing And Reconciliation Optimization
+
+Local load testing exposed a N+1 problem in reconciliation. On a dataset with about 25 wallets, 15,675 transactions, and 30,656 ledger entries, the synchronous reconciliation endpoint still had not returned after 600 seconds.
+
+The issue was not PostgreSQL lock contention. The problem was the query shape in the application: successful transactions were loaded and then ledger entries were fetched transaction by transaction. Replacing that path with aggregate SQL queries and adding supporting indexes brought reconciliation down to milliseconds on the same dataset.
+
+The write-up is in [docs/load-testing-and-reconciliation.md](/home/felix/Projects/AtomicLedger/docs/load-testing-and-reconciliation.md).
+
 ## Tradeoffs And Future Improvements
 
 - Wallet balance is cached for fast reads. That keeps the API simple, but it means reconciliation has to keep proving the cached value still matches ledger truth.
