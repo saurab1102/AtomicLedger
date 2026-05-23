@@ -179,6 +179,48 @@ Run the full test suite with:
 
 The suite uses Testcontainers with PostgreSQL, so Docker needs to be available. GitHub Actions runs the same command on GitHub-hosted Ubuntu runners.
 
+## Load Testing
+
+There is a local k6 script at `load-tests/atomicledger-transfer-load.js` for exercising authenticated wallet, deposit, and transfer traffic against a running AtomicLedger instance.
+
+Install k6, start the app on `localhost:8080`, and run:
+
+```bash
+k6 run load-tests/atomicledger-transfer-load.js
+```
+
+Useful runtime inputs:
+
+```bash
+API_KEY=atomicledger-local-api-key \
+VUS=10 \
+DURATION=60s \
+k6 run load-tests/atomicledger-transfer-load.js
+```
+
+The script:
+
+- targets `http://localhost:8080` by default
+- sends `X-API-Key` on protected API requests
+- creates source and destination wallets automatically unless you provide both `SOURCE_WALLET_ID` and `DESTINATION_WALLET_ID`
+- seeds the source wallet with an initial deposit
+- mixes repeated transfer attempts with deliberate duplicate idempotency-key replays
+
+Useful environment variables:
+
+- `BASE_URL`
+- `API_KEY`
+- `SOURCE_WALLET_ID`
+- `DESTINATION_WALLET_ID`
+- `INITIAL_DEPOSIT_AMOUNT`
+- `DEPOSIT_AMOUNT`
+- `TRANSFER_AMOUNT`
+- `DEPOSIT_EVERY`
+- `VUS`
+- `DURATION`
+
+This script is for local behavior exercise and rough load exploration, not production-grade benchmarking.
+
 ## Tradeoffs And Future Improvements
 
 - Wallet balance is cached for fast reads. That keeps the API simple, but it means reconciliation has to keep proving the cached value still matches ledger truth.
